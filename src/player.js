@@ -1,8 +1,10 @@
-// First-person player: movement (sprint/slide/wall-jump/mantle/air dash), swing-grapple, camera feel, health, weapons.
+// First-person player: movement (sprint/slide/double-jump/mantle/air dash), swing-grapple, camera feel, health, weapons.
 import * as THREE from 'three';
 import { makeBody } from './physics.js';
 import { makeInkMaterial, INK } from './render.js';
-import { Rifle, Shotgun, Sniper, Katana } from './weapons.js';
+import { Rifle, Shotgun, Sniper, Katana, Revolver, SMG, ArsenalGun, DualPistols } from './weapons.js';
+import { WEAPON_ORDER, GRENADE, blastDamage, ropeCorrection } from './combat.js';
+import { Ordnance } from './ordnance.js';
 // the dome shell and anything else flagged this way cannot be hooked
 const NO_GRAPPLE = (b) => !!b.data.noGrapple;
 const STAM_FIRE = 0.09, STAM_DRAIN = 0.08, STAM_GROUND = 0.4, STAM_AIR = 0.2, STAM_MIN = 0.18, STAM_PAUSE = 0.5, PARRY_WINDOW = 0.55;
@@ -21,16 +23,19 @@ export class Player {
     this.eye = new THREE.Vector3(); this.center = new THREE.Vector3(); this.forward = new THREE.Vector3(0, 0, -1); this.right = new THREE.Vector3(1, 0, 0);
     this.speed = 0; this.hurtFx = 0; this.flashFx = 0; this.lastDamageT = 10;
     this.rig = new THREE.Group(); this.camera.add(this.rig); ctx.scene.add(this.camera);
-    this.weapons = [new Rifle(ctx), new Shotgun(ctx), new Sniper(ctx), new Katana(ctx)]; this.katanaIndex = 3;
+    const weaponTypes = { rifle: Rifle, shotgun: Shotgun, sniper: Sniper, katana: Katana, revolver: Revolver, smg: SMG };
+    weaponTypes.dual = DualPistols;
+    this.weapons = WEAPON_ORDER.map(kind => weaponTypes[kind] ? new weaponTypes[kind](ctx) : new ArsenalGun(ctx, kind)); this.katanaIndex = WEAPON_ORDER.indexOf('katana');
     for (const w of this.weapons) { this.rig.add(w.root); if (w.isGun) w.startReserve = w.reserve; }
+    this.ordnance = new Ordnance(ctx);
     this.weaponIndex = 0; this.weapon = this.weapons[0]; this.weapon.equip(); this.returnT = 0; this.prevWeaponIndex = 0;
     this.recoilPitch = new Spring(190, 17); this.recoilYaw = new Spring(190, 17); this.fovKick = new Spring(220, 14); this.landDip = new Spring(170, 15);
     this.roll = 0; this.fov = 82; this.bobPhase = 0; this.bobAmt = 0; this.stepDist = 0; this.eyeH = EYE_STAND;
-    this.crouching = false; this.sliding = false; this.slideT = 0; this.coyote = 0; this.jumpBuffer = 0; this.wallTouch = 9; this.wallN = new THREE.Vector3(); this.wallJumpCd = 0; this.mantleCd = 0;
+    this.crouching = false; this.sliding = false; this.slideT = 0; this.coyote = 0; this.jumpBuffer = 0; this.mantleCd = 0;
     this.dashCd = 0; this.airJumps = 1; this.blockCd = 0; this.landGraceT = 0; this.sprintToggle = false; this.lastGround = true; this.airT = 0; this._sprinting = false; this._aiming = false; this._mv = { x: 0, y: 0 };
     this.grapple = { state: 'idle', anchor: new THREE.Vector3(), hook: new THREE.Vector3(), from: new THREE.Vector3(), flyT: 0, flyDur: 0, len: 0, cd: 0, enemy: null, mover: null, blockedT: 0, t: 0, swingT: 0, hopT: 0 };
     this.deathT = 0; this.gravityScale = 1; this.dashLock = false;
-    this.isLocal = true; this.team = 0; this.name = 'you'; this.grenades = 3; this.maxGrenades = 5; this.nades = []; this.nadeCd = 0; this.firing = false; this.onThrow = null;
+    this.isLocal = true; this.team = 0; this.name = 'you'; this.grenades = 3; this.maxGrenades = 5; this.nades = []; this.nadeCd = 0; this.firing = false; this.onThrow = null; this.grenadeSerial = 0; this.seenGrenades = new Set();
     const rm = makeInkMaterial({ ink: INK.BLUE, fill: false, shadeBias: -0.3 });
     this.rope = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 6), rm); this.rope.visible = false; ctx.scene.add(this.rope);
     const hm = makeInkMaterial({ ink: INK.BLUE }); this.hookMesh = new THREE.Group();
@@ -42,10 +47,13 @@ export class Player {
     const b = this.body; b.pos.copy(pos); b.vel.set(0, 0, 0); b.onGround = false; b.height = STAND_H;
     this.hp = this.maxHp; this.alive = true; this.yaw = 0; this.pitch = 0; this.roll = 0; this.hurtFx = 0; this.flashFx = 0; this.crouching = false; this.sliding = false; this.deathT = 0; this.lastDamageT = 10; this.dashCd = 0; this.airJumps = 1; this.gravityScale = 1; this.dashLock = false;
     this.detachGrapple(false);
-    for (const w of this.weapons) if (w.isGun) { w.mag = w.magSize; w.reserve = w.startReserve; w.reloading = false; w.pumpT = 0; }
+    for (const w of this.weapons) w.reset();
+    this.returnT = 0; this.prevWeaponIndex = 0; this.nadeCd = 0; this.blockCd = 0; this.stamPause = 0;
+    this.sprintToggle = false; this._aiming = false; this.jumpBuffer = 0; this.coyote = 0;
+    this.ordnance.reset(); this.mantleCd = 0; this.lastGround = false;
     this.switchTo(0, true); this.rig.visible = true; this.eyeH = EYE_STAND; this.grenades = 3; this.clearNades();
   }
-  clearNades() { for (const n of this.nades) this.ctx.scene.remove(n.mesh); this.nades.length = 0; }
+  clearNades() { for (const n of this.nades) this.ctx.scene.remove(n.mesh); this.nades.length = 0; this.seenGrenades.clear(); }
   get isBlocking() { return this.weapon.kind === 'katana' && this.weapon.blocking; }
   aimDir(spread = 0) { const d = this.forward.clone(); if (spread > 0) { d.addScaledVector(this.right, rand(-spread, spread)); d.y += rand(-spread, spread); d.normalize(); } return d; }
   recoil(p, y) { this.pitch = clamp(this.pitch + p * 0.55, -1.5, 1.5); this.recoilPitch.kick(p * 22); this.recoilYaw.kick(y * 30); }
@@ -57,6 +65,7 @@ export class Player {
   }
   switchTo(i, silent = false) {
     if (i < 0 || i >= this.weapons.length) return; if (i === this.weaponIndex && !silent) return;
+    this.returnT = 0;
     if (this.weapon.kind !== 'katana') this.prevWeaponIndex = this.weaponIndex;
     this.weapon.unequip(); this.weaponIndex = i; this.weapon = this.weapons[i]; this.weapon.equip(); if (!silent) audio.switchWeapon();
     this.ctx.hud.setWeapon(this.weapon.name, this.weapon.hint); this.ctx.hud.setCrosshairMode(this.weapon.kind === 'katana' ? 'katana' : '');
@@ -89,7 +98,7 @@ export class Player {
     ctx.effects.strokeBurst(proj.pos, INK.BLUE, perfect ? 8 : 5, 4.5, { life: 0.2, size: 0.028 });
     ctx.input.rumble(0.4, 0.6, 70); ctx.game.hitstop(perfect ? 0.07 : 0.025, 0.18);
     ctx.effects.shakeAmt += 0.06; this.flashFx = perfect ? 0.35 : 0.1;
-    ctx.game.addScore(perfect ? 60 : 15, perfect ? '完美招架' : '格挡成功');
+    ctx.game.addScore(perfect ? 60 : 15, perfect ? 'Kusursuz savuşturma' : 'Savuşturuldu');
     return { perfect, ret };
   }
   get parryWindow() { return this.isBlocking && this.blockHeld < PARRY_WINDOW; }
@@ -98,7 +107,7 @@ export class Player {
     _v.subVectors(e.center, this.eye).normalize(); if (_v.dot(this.forward) < 0.35) return false;
     this.weapon.onDeflect(true); audio.parry(); this.ctx.game.hitstop(0.06, 0.15);
     this.ctx.effects.sparks(_v2.copy(this.eye).addScaledVector(this.forward, 0.8), this.forward.clone().negate(), INK.ORANGE, 12, 8);
-    this.ctx.game.addScore(40, '格挡成功'); this.ctx.input.rumble(0.6, 0.6, 100); return true;
+    this.ctx.game.addScore(40, 'Savuşturuldu'); this.ctx.input.rumble(0.6, 0.6, 100); return true;
   }
   die() { this.alive = false; this.deathT = 0; audio.death(); this.detachGrapple(false); this.ctx.game.onPlayerDeath(); }
   idleCam(t) {
@@ -110,6 +119,7 @@ export class Player {
   update(dt) {
     const ctx = this.ctx, inp = ctx.input, b = this.body;
     this.lastDamageT += dt;
+    this.ordnance.update(dt);
     if (!this.alive) {
       this.deathT += dt; this.eyeH = damp(this.eyeH, 0.35, 3, dt); this.roll = damp(this.roll, 0.9, 3, dt); this.pitch = damp(this.pitch, -0.35, 3, dt);
       b.vel.x = damp(b.vel.x, 0, 4, dt); b.vel.z = damp(b.vel.z, 0, 4, dt); b.vel.y -= G * dt; ctx.world.moveBody(b, dt);
@@ -118,7 +128,7 @@ export class Player {
     }
     this.rig.visible = true;
     // ---- look ----
-    const lookMul = this._aiming ? (this.weapon.scope ? 0.38 : 0.62) : 1;
+    const lookMul = this._aiming ? (this.weapon.scope ? 1 / this.weapon.scopeZoom : 0.62) : 1;
     this.yaw += inp.look.x * lookMul; this.pitch = clamp(this.pitch + inp.look.y * lookMul, -1.5, 1.5);
     this.forward.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
     _fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)); _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw)); this.right.copy(_right);
@@ -158,21 +168,15 @@ export class Player {
       this.coyote -= dt; this.airT += dt;
       if (wishLen > 0) { const cur = b.vel.x * wish.x + b.vel.z * wish.z; const add = Math.min(AIR_CAP * wishLen - cur, AIR_ACCEL * dt); if (add > 0) { b.vel.x += wish.x * add; b.vel.z += wish.z * add; } }
     }
-    // ---- jumping / wall jump / air dash ----
+    // ---- jumping / double jump / air dash ----
     if (inp.pressed('jump')) this.jumpBuffer = 0.15; else this.jumpBuffer -= dt;
-    this.wallJumpCd -= dt; this.mantleCd -= dt;
-    if (b.hitWall && !b.onGround) { this.wallTouch = 0; this.wallN.copy(b.wallNormal); } else this.wallTouch += dt;
+    this.mantleCd -= dt;
     if (this.jumpBuffer > 0) {
       if (this.grapple.state === 'on') { this.jumpBuffer = 0; this.detachGrapple(true); }
       else if (b.onGround || this.coyote > 0) {
         this.jumpBuffer = 0; this.coyote = 0; b.vel.y = JUMP; b.onGround = false; this.airJumps = 1;
         if (this.sliding) { b.vel.x *= 1.06; b.vel.z *= 1.06; this.sliding = false; }
         audio.jump(); this.landDip.kick(-1.2);
-      } else if (this.wallTouch < 0.12 && this.wallJumpCd <= 0 && b.vel.y < 7) {
-        this.jumpBuffer = 0; this.wallJumpCd = 0.35; const n = this.wallN;
-        b.vel.x = n.x * 7.5 + b.vel.x * 0.35 + _fwd.x * 2.5; b.vel.z = n.z * 7.5 + b.vel.z * 0.35 + _fwd.z * 2.5; b.vel.y = 9.2;
-        audio.wallJump(); this.roll += n.dot(_right) > 0 ? -0.1 : 0.1; this.kickFov(2); this.landDip.kick(-1.5);
-        this.airJumps = 1;
       } else if (this.airJumps > 0) {
         // double jump: a second beat of height, and it redirects toward where you are steering
         this.jumpBuffer = 0; this.airJumps--;
@@ -191,9 +195,10 @@ export class Player {
     b.noSnap = this.grapple.state === 'on' || b.vel.y > 0.5;
     const spd = b.vel.length(); if (spd > 48) b.vel.multiplyScalar(48 / spd);
     ctx.world.moveBody(b, dt);
-    if (b.pos.y < -12 || Math.abs(b.pos.x) > 95 || Math.abs(b.pos.z) > 95) {
+    const bounds = ctx.level.bounds;
+    if (b.pos.y < -12 || b.pos.x < bounds.minX - 10 || b.pos.x > bounds.maxX + 10 || b.pos.z < bounds.minZ - 10 || b.pos.z > bounds.maxZ + 10) {
       this.detachGrapple(false); b.pos.copy(ctx.level.playerStart); b.vel.set(0, 0, 0); this.takeDamage(20, null); if (this.onFall) this.onFall();
-      ctx.hud.message('掉出纸面', '已在起点重新绘制', 1.8);
+      ctx.hud.message('Sayfadan düştün', 'Başlangıç noktasına döndün', 1.8);
     }
     if (b.onGround && !this.lastGround) {
       const impact = clamp(-b.landVel / 14, 0, 1.5); this.landDip.kick(-impact * 6 - 0.5); audio.land(impact);
@@ -208,7 +213,7 @@ export class Player {
     this.stamPause -= dt;
     if (this.grapple.state !== 'idle') this.grapStam -= STAM_DRAIN * dt; else if (this.stamPause <= 0) this.grapStam += (b.onGround ? STAM_GROUND : STAM_AIR) * dt;
     this.grapStam = clamp(this.grapStam, 0, 1);
-    if (this.grapple.state === 'on' && this.grapStam <= 0) { this.detachGrapple(false); ctx.hud.tip('喘不过气了 · 落地恢复体力', 1.4); }
+    if (this.grapple.state === 'on' && this.grapStam <= 0) { this.detachGrapple(false); ctx.hud.tip('Grapple tükendi · Yerde daha hızlı dolar', 1.4); }
     const hs2 = Math.hypot(b.vel.x, b.vel.z); const moving = b.onGround && hs2 > 0.6 && !this.sliding;
     this.bobAmt = damp(this.bobAmt, moving ? clamp(hs2 / 7, 0.3, 1.4) : 0, 8, dt);
     if (moving) { this.bobPhase += dt * (7 + hs2 * 0.5); this.stepDist += hs2 * dt; if (this.stepDist > (sprinting ? 2.5 : 2.0)) { this.stepDist = 0; audio.footstep(clamp(hs2 / 8, 0.3, 1)); } }
@@ -220,16 +225,21 @@ export class Player {
     this.updateNadeArc(this._nadeHeld ? this.nadeCharge : -1);
     this.updateNades(dt);
     // ---- weapons ----
-    for (let i = 0; i < 5; i++) if (inp.pressed('slot' + (i + 1))) this.switchTo(Math.min(i, this.weapons.length - 1));
-    if (inp.pressed('nextWeapon')) this.switchTo((this.weaponIndex + 1) % this.weapons.length);
-    if (inp.pressed('prevWeapon')) this.switchTo((this.weaponIndex + this.weapons.length - 1) % this.weapons.length);
+    for (let i = 0; i < this.weapons.length; i++) if (inp.pressed('slot' + (i + 1))) this.switchTo(i);
+    if (aiming && this.weapon.scope) {
+      const zoom = inp.wheelDelta ? -Math.sign(inp.wheelDelta) : inp.pressed('zoomIn') || inp.pressed('nextWeapon') ? 1 : inp.pressed('zoomOut') || inp.pressed('prevWeapon') ? -1 : 0;
+      if (zoom) this.weapon.changeZoom(zoom);
+    } else {
+      if (inp.pressed('nextWeapon')) this.switchTo((this.weaponIndex + 1) % this.weapons.length);
+      if (inp.pressed('prevWeapon')) this.switchTo((this.weaponIndex + this.weapons.length - 1) % this.weapons.length);
+    }
     const st = this._weaponState(sprinting, aiming, hs2);
     if (inp.pressed('melee') && this.weapon.kind !== 'katana') { this.switchTo(this.katanaIndex); this.returnT = 0.85; this.weapons[this.katanaIndex].startSlash(st); st.meleePressed = false; }
     if (this.returnT > 0) { if (this.weapon.kind === 'katana' && (st.firePressed || st.aim || st.meleePressed)) this.returnT = 0; else { this.returnT -= dt; if (this.returnT <= 0) this.switchTo(this.prevWeaponIndex); } }
     this.firing = st.fire && this.weapon.isGun;
     this.weapon.animate(dt, st);
     ctx.hud.setAds(this.weapon.isGun && this.weapon.aimAmt > 0.55);
-    ctx.hud.setScope(!!this.weapon.scope && this.weapon.aimAmt > 0.62);
+    ctx.hud.setScope(!!this.weapon.scope && this.weapon.aimAmt > 0.62, this.weapon.scopeZoom);
   }
   // ---- grenades: a lobbed ink bomb with a short fuse and a big orange blast ----
   // where a throw starts and how fast it leaves, for a given charge (0 = flick, 1 = full wind-up)
@@ -239,28 +249,33 @@ export class Player {
   }
   throwGrenade(remote = null, charge = 0) {
     const ctx = this.ctx; let pos, vel;
+    if (remote && (!Array.isArray(remote.pos) || !Array.isArray(remote.vel) || remote.pos.length !== 3 || remote.vel.length !== 3 || ![...remote.pos, ...remote.vel].every(Number.isFinite))) return;
+    if (remote && remote.id && this.seenGrenades.has(remote.id)) return;
+    const id = remote ? remote.id : `${this.id || 'local'}:${++this.grenadeSerial}`;
+    if (id) { this.seenGrenades.add(id); if (this.seenGrenades.size > 256) this.seenGrenades.delete(this.seenGrenades.values().next().value); }
     if (remote) { pos = new THREE.Vector3().fromArray(remote.pos); vel = new THREE.Vector3().fromArray(remote.vel); }
     else {
       this.grenades--; this.nadeCd = 0.55; pos = new THREE.Vector3(); vel = new THREE.Vector3(); this._nadeLaunch(charge, pos, vel);
       this.weapon.recoil.kick(-0.4, 0.5, 1.2); this.weapon.recoilRot.kick(-3, 0, -1.5); audio.grappleFire(); ctx.input.rumble(0.2, 0.4, 50);
-      if (this.onThrow) this.onThrow({ pos: pos.toArray().map((v) => +v.toFixed(2)), vel: vel.toArray().map((v) => +v.toFixed(2)) });
+      if (this.onThrow) this.onThrow({ id, pos: pos.toArray().map((v) => +v.toFixed(2)), vel: vel.toArray().map((v) => +v.toFixed(2)) });
     }
     const g = new THREE.Group();
     g.add(new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), makeInkMaterial({ ink: INK.BLACK })));
     const pin = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.02, 4, 8), makeInkMaterial({ ink: INK.ORANGE })); pin.position.y = 0.2; g.add(pin);
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.1, 6), makeInkMaterial({ ink: INK.ORANGE })); cap.position.y = 0.17; g.add(cap);
     g.position.copy(pos); ctx.scene.add(g);
-    this.nades.push({ mesh: g, pos, vel, ang: new THREE.Vector3(rand(-6, 6), rand(-6, 6), rand(-6, 6)), fuse: 1.7, mine: !remote, rest: false, tick: 0 });
+    this.nades.push({ id, mesh: g, pos, vel, ang: new THREE.Vector3(rand(-6, 6), rand(-6, 6), rand(-6, 6)), fuse: 1.7, mine: !remote, rest: false, tick: 0 });
   }
   updateNadeArc(charge) {
     if (!this._arc) {
       const dots = []; const mat = makeInkMaterial({ ink: INK.BLACK, fill: true });
       for (let i = 0; i < 26; i++) { const m = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), mat); m.visible = false; this.ctx.scene.add(m); dots.push(m); }
       const mark = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.05, 5, 18), makeInkMaterial({ ink: INK.ORANGE })); mark.rotation.x = Math.PI / 2; mark.visible = false; this.ctx.scene.add(mark);
-      this._arc = { dots, mark };
+      const area = new THREE.Mesh(new THREE.TorusGeometry(GRENADE.radius, 0.035, 4, 80), makeInkMaterial({ ink: INK.ORANGE })); area.rotation.x = Math.PI / 2; area.visible = false; this.ctx.scene.add(area);
+      this._arc = { dots, mark, area };
     }
     const A = this._arc;
-    if (charge < 0) { if (A.shown) { for (const d of A.dots) d.visible = false; A.mark.visible = false; A.shown = false; } return; }
+    if (charge < 0) { if (A.shown) { for (const d of A.dots) d.visible = false; A.mark.visible = false; A.area.visible = false; A.shown = false; } return; }
     A.shown = true; const world = this.ctx.world; this._nadeLaunch(charge, _ap, _av); let n = 0; const step = 1 / 30;
     for (let i = 0; i < 52 && n < A.dots.length; i++) {
       _av.y -= 22 * step; _aprev.copy(_ap); _ap.addScaledVector(_av, step); _ad.subVectors(_ap, _aprev); const len = _ad.length();
@@ -269,6 +284,7 @@ export class Player {
     }
     for (let i = n; i < A.dots.length; i++) A.dots[i].visible = false;
     A.mark.position.copy(_ap); A.mark.position.y += 0.02; A.mark.visible = true; A.mark.scale.setScalar(0.8 + charge * 0.5);
+    A.area.position.copy(A.mark.position); A.area.visible = true;
   }
   updateNades(dt) {
     const ctx = this.ctx, world = ctx.world;
@@ -294,16 +310,19 @@ export class Player {
     }
   }
   explodeNade(n) {
-    const ctx = this.ctx, R = 6.4, c = n.pos.clone(); c.y += 0.25;
+    if (n.exploded) return; n.exploded = true;
+    const ctx = this.ctx, R = GRENADE.radius, c = n.pos.clone(); c.y += 0.25;
     ctx.effects.boom(c, R); audio.explosion(c); ctx.input.rumble(0.9, 0.9, 220);
-    // bots: the thrower's client reports the damage (host applies it; a client's report is forwarded)
-    if (n.mine) ctx.enemies.blastEnemies(c, R, 120, null);
-    if (n.mine && ctx.blastBreakables) ctx.blastBreakables(c, R);
-    // me: my own grenade, or anyone else's that went off on my screen
+    // Remote grenades are visual only. The thrower owns opponent damage.
+    if (!n.mine) return;
+    const visible = target => ctx.world.hasLineOfSight(c, target);
+    const selfExposed = visible(this.center);
+    const targets = ctx.targets ? ctx.targets().filter(t => !t.isLocal && t.alive && (!ctx.canHurt || ctx.canHurt(t)) && visible(t.center)) : [];
+    ctx.enemies.blastEnemies(c, R, GRENADE.damage, null, GRENADE.innerRadius, GRENADE.edgeDamage);
     const d = this.center.distanceTo(c);
-    if (this.alive && d < R * 0.95) { this.takeDamage(10 + 34 * (1 - d / (R * 0.95)), c); this.knockback(_v.subVectors(this.center, c).normalize(), 9); }
-    // other players in a versus match, decided by the thrower only
-    if (n.mine && ctx.targets) for (const t of ctx.targets()) { if (t.isLocal || !t.alive || (ctx.canHurt && !ctx.canHurt(t))) continue; const dd = t.center.distanceTo(c); if (dd < R * 0.95) t.takeDamage(12 + 50 * (1 - dd / (R * 0.95)), c); }
+    if (this.alive && selfExposed && d < R * 0.8) { this.takeDamage(blastDamage(d, R * 0.8, 36, 1, 5), c); this.knockback(_v.subVectors(this.center, c).normalize(), 7); }
+    for (const t of targets) { const dd = t.center.distanceTo(c); if (dd < R) { const damage = blastDamage(dd, R, 85, 3, 15); if (ctx.hitGrenadePlayer) ctx.hitGrenadePlayer(t, damage, c, n.id); else t.takeDamage(damage, c); } }
+    if (ctx.blastBreakables) ctx.blastBreakables(c, R);
   }
   _weaponState(sprinting, aiming, hs) {
     const inp = this.ctx.input, b = this.body;
@@ -339,12 +358,12 @@ export class Player {
     const wallDist = hitW ? hitW.dist : maxD;
     // exact hit on an enemy
     const hitE = ctx.enemies.raycast(o, d, Math.min(50, wallDist + 0.5));
-    if (hitE) return { point: hitE.point.clone(), enemy: hitE.enemy, dist: hitE.dist };
+    if (hitE && ctx.world.hasLineOfSight(o, hitE.point)) return { point: hitE.point.clone(), enemy: hitE.enemy, dist: hitE.dist };
     // things that move and can be swung from (paper planes): a forgiving sphere test
     let mBest = null, mLat = Infinity;
     for (const mv of ctx.level.grappleMovers || []) {
       _v.subVectors(mv.mesh.position, o); const t = _v.dot(d); if (t < 2 || t > Math.min(maxD, wallDist + 1)) continue;
-      const lat = Math.sqrt(Math.max(0, _v.lengthSq() - t * t)); if (lat < mv.radius + 0.3 + t * 0.012 && lat < mLat) { mLat = lat; mBest = { point: mv.mesh.position.clone(), mover: mv, dist: t }; }
+      const lat = Math.sqrt(Math.max(0, _v.lengthSq() - t * t)); if (lat < mv.radius + 0.3 + t * 0.012 && lat < mLat && ctx.world.hasLineOfSight(o, mv.mesh.position)) { mLat = lat; mBest = { point: mv.mesh.position.clone(), mover: mv, dist: t }; }
     }
     if (mBest) return mBest;
     // near miss on an enemy: forgiving, but it has to be roughly where you are pointing
@@ -365,15 +384,15 @@ export class Player {
     for (const r of ctx.level.rings) {
       _v.subVectors(r, o); const t = _v.dot(d); if (t < 2 || t > Math.min(maxD, wallDist + 1.5)) continue;
       const lat = Math.sqrt(Math.max(0, _v.lengthSq() - t * t));
-      if (lat > 0.8 + t * 0.02) continue;
+      if (lat > 0.8 + t * 0.02 || !ctx.world.hasLineOfSight(o, r)) continue;
       if (lat < ringLat) { ring = r; ringT = t; ringLat = lat; }
     }
     if (ring) return { point: ring.clone(), enemy: null, dist: ringT };
-    if (hitW) return { point: hitW.point.clone().addScaledVector(hitW.normal, 0.12), enemy: null, dist: hitW.dist };
+    if (hitW) { const point = hitW.point.clone().addScaledVector(hitW.normal, 0.12); if (ctx.world.hasLineOfSight(o, point)) return { point, enemy: null, dist: hitW.dist }; }
     return null;
   }
   _fireGrapple() {
-    if (this.grapStam < STAM_MIN) { audio.winded(); this.ctx.hud.tip('抓钩需要缓口气', 0.9); return; }
+    if (this.grapStam < STAM_MIN) { audio.winded(); this.ctx.hud.tip('Grapple dinleniyor', 0.9); return; }
     const t = this._findGrappleTarget(); if (!t) { audio.empty(); return; }
     this.grapStam -= STAM_FIRE; this.stamPause = STAM_PAUSE;
     const g = this.grapple; g.state = 'fly'; g.anchor.copy(t.point); this._handPos(g.from); g.hook.copy(g.from); g.flyT = 0; g.flyDur = clamp(t.dist / 110, 0.04, 0.6); g.enemy = t.enemy || null; g.mover = t.mover || null; g.t = 0;
@@ -382,10 +401,11 @@ export class Player {
   detachGrapple(boost) {
     const g = this.grapple; if (g.state === 'idle') return; const was = g.state; g.state = 'idle'; g.cd = 0.12; g.enemy = null; g.mover = null; this.stamPause = STAM_PAUSE;
     this.rope.visible = false; this.hookMesh.visible = false; audio.reelLoop(false); this.ctx.hud.grappleTarget(0);
-    if (was === 'on') { const b = this.body; if (boost) { b.vel.y = Math.max(b.vel.y, 0) + 8; b.vel.x *= 1.12; b.vel.z *= 1.12; audio.jump(); this.kickFov(3); } else { b.vel.y += 2.5; audio.grappleRelease(); } }
+    if (was === 'on') { const b = this.body; if (boost) { b.vel.y = Math.max(b.vel.y, 0) + 8; b.vel.x *= 1.12; b.vel.z *= 1.12; audio.jump(); this.kickFov(3); } else audio.grappleRelease(); }
   }
   _updateGrapple(dt) {
     const g = this.grapple, inp = this.ctx.input, b = this.body, ctx = this.ctx; g.cd -= dt;
+    if (g.state !== 'idle' && !inp.down('grapple')) { this.detachGrapple(false); return; }
     if (g.state === 'idle') {
       if (inp.pressed('grapple') && g.cd <= 0) this._fireGrapple();
       g.t += dt; if (g.t > 0.08) { g.t = 0; ctx.hud.grappleTarget(this._findGrappleTarget() ? 1 : 0); }
@@ -393,13 +413,14 @@ export class Player {
       if (g.mover) g.anchor.copy(g.mover.mesh.position);
       g.flyT += dt; const f = Math.min(1, g.flyT / g.flyDur); g.hook.lerpVectors(g.from, g.anchor, f);
       if (f >= 1) {
-        if (g.enemy) { if (g.enemy.alive) { ctx.enemies.yank(g.enemy, this.center); ctx.game.addScore(30, '拽翻'); audio.grappleHit(); ctx.input.rumble(0.5, 0.5, 90); } this.detachGrapple(false); }
+        if (!ctx.world.hasLineOfSight(this.eye, g.anchor)) { this.detachGrapple(false); return; }
+        if (g.enemy) { if (g.enemy.alive) { ctx.enemies.yank(g.enemy, this.center); ctx.game.addScore(30, 'Yakaladın'); audio.grappleHit(); ctx.input.rumble(0.5, 0.5, 90); } this.detachGrapple(false); }
         else { g.state = 'on'; g.len = Math.max(1.5, this.center.distanceTo(g.anchor) * 0.94); g.blockedT = 0; g.t = 0; g.swingT = 0; audio.grappleHit(); audio.reelLoop(true); ctx.hud.grappleTarget(2); ctx.input.rumble(0.3, 0.6, 60); if (b.onGround) { b.vel.y = Math.max(b.vel.y, 5); b.onGround = false; } }
       }
     } else if (g.state === 'on') {
       if (g.mover) g.anchor.copy(g.mover.mesh.position);
       g.hook.copy(g.anchor); g.swingT += dt; const c = this.center; _d.subVectors(g.anchor, c); const dist = _d.length(); if (dist > 0.01) _d.divideScalar(dist);
-      const reeling = inp.down('grapple'); const vAlong = b.vel.dot(_d);
+      const reeling = inp.down('grapple'); const vAlong = b.vel.dot(_d) - (g.mover?.velocity?.dot(_d) || 0);
       if (reeling) { g.len = Math.max(1.5, g.len - 14 * dt); if (vAlong < 22) b.vel.addScaledVector(_d, 42 * dt); }
       else {
         if (vAlong < 6) b.vel.addScaledVector(_d, 3 * dt);
@@ -408,12 +429,12 @@ export class Player {
       }
       if (dist > g.len) {
         const vn = b.vel.dot(_d); if (vn < 0) b.vel.addScaledVector(_d, -vn);
-        const excess = Math.min(dist - g.len, 0.35) * 0.85; b.pos.addScaledVector(_d, excess);
+        const excess = ropeCorrection(dist - g.len, dt); b.pos.addScaledVector(_d, excess);
         if (ctx.world.overlapsBody(b)) b.pos.addScaledVector(_d, -excess);
       }
       if (b.onGround && reeling && _d.y > 0.2) { b.vel.y = Math.max(b.vel.y, 4.5); b.onGround = false; }
       g.t += dt; if (g.t > 0.15) { g.t = 0; if (!ctx.world.hasLineOfSight(this.eye, g.anchor)) g.blockedT += 0.15; else g.blockedT = 0; }
-      if (inp.pressed('grapple') || dist < 1.3 || g.blockedT > 0.3 || dist > 90 || (b.onGround && g.swingT > 0.6 && !reeling)) this.detachGrapple(dist < 1.3);
+      if ((!g.mover && dist < 1.3) || g.blockedT > 0.3 || dist > 90 || (b.onGround && g.swingT > 0.6 && !reeling)) this.detachGrapple(dist < 1.3);
     }
     if (g.state !== 'idle') {
       this._handPos(_v3); alignYAxis(this.rope, _v3, g.hook, 0.008); this.rope.visible = true;

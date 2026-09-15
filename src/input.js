@@ -4,7 +4,7 @@ import { clamp } from './util.js';
 const KEYMAP = {
   KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right',
   Space: 'jump', ShiftLeft: 'sprint', ShiftRight: 'sprint', ControlLeft: 'crouch', KeyC: 'crouch',
-  KeyR: 'reload', KeyQ: 'grapple', KeyE: 'grapple', KeyF: 'melee', KeyV: 'melee',
+  KeyR: 'reload', KeyQ: 'grapple', KeyB: 'mine', Equal: 'zoomIn', Minus: 'zoomOut', Digit7: 'slot7', Digit8: 'slot8', Digit9: 'slot9', Digit0: 'slot10', KeyF: 'melee', KeyV: 'melee', Digit6: 'slot6',
   Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', Digit4: 'slot4', Digit5: 'slot5', Escape: 'pause', KeyP: 'pause', Enter: 'confirm', KeyG: 'grenade', KeyX: 'dash', AltLeft: 'dash', KeyM: 'music', KeyT: 'talk', Tab: 'score',
 };
 const MOUSEMAP = { 0: 'fire', 2: 'aim', 1: 'grapple', 3: 'grapple', 4: 'melee' };
@@ -15,7 +15,7 @@ export class Input {
   constructor(canvas) {
     this.canvas = canvas;
     this.state = {}; this.prev = {}; this.frameState = {};
-    this.keys = {}; this.mouseBtns = {};
+    this.keys = {}; this.mouseBtns = {}; this.pendingActions = new Set();
     this.move = { x: 0, y: 0 };
     this.look = { x: 0, y: 0 };
     this.mx = 0; this.my = 0; this.wheel = 0;
@@ -26,15 +26,16 @@ export class Input {
     this.invertY = false; this.onDeviceChange = null;
 
     window.addEventListener('keydown', (e) => {
+      if (e.target.closest?.('.screen.show') && e.target.closest('input, button, textarea, select, summary, a')) return;
       if (e.repeat) return;
-      this.lastActive = performance.now(); const a = KEYMAP[e.code]; if (a) { this.keys[a] = true; if (this.usingGamepad && this.onDeviceChange) this.onDeviceChange(false); this.usingGamepad = false; }
+      this.lastActive = performance.now(); const a = KEYMAP[e.code]; if (a) { this.keys[a] = true; this.pendingActions.add(a); if (this.usingGamepad && this.onDeviceChange) this.onDeviceChange(false); this.usingGamepad = false; }
       if (!e.shiftKey) this.keys.sprint = false;
       if (['Space', 'Tab', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
       this.anyInput = true;
     });
     window.addEventListener('keyup', (e) => { const a = KEYMAP[e.code]; if (a) this.keys[a] = false; if (!e.shiftKey) this.keys.sprint = false; });
-    document.addEventListener('visibilitychange', () => { if (document.hidden) { this.keys = {}; this.mouseBtns = {}; } });
-    window.addEventListener('blur', () => { this.keys = {}; this.mouseBtns = {}; });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { this.keys = {}; this.mouseBtns = {}; this.pendingActions.clear(); } });
+    window.addEventListener('blur', () => { this.keys = {}; this.mouseBtns = {}; this.pendingActions.clear(); });
     this.padState = {}; this.padPrev = {};
     document.addEventListener('mousemove', (e) => {
       if (!this.pointerLocked) return;
@@ -44,7 +45,8 @@ export class Input {
       this.mx += dx; this.my += dy; this.usingGamepad = false; this.lastActive = performance.now();
     });
     document.addEventListener('mousedown', (e) => {
-      const a = MOUSEMAP[e.button]; if (a) this.mouseBtns[a] = true;
+      if (e.target.closest?.('.screen.show .panel')) return;
+      const a = MOUSEMAP[e.button]; if (a) { this.mouseBtns[a] = true; this.pendingActions.add(a); }
       if (this.usingGamepad && this.onDeviceChange) this.onDeviceChange(false);
       this.usingGamepad = false; this.anyInput = true; this.lastActive = performance.now();
       if (e.button === 1 || e.button === 3 || e.button === 4) e.preventDefault();
@@ -83,6 +85,10 @@ export class Input {
     const s = this.state;
     for (const k in this.keys) if (this.keys[k]) s[k] = true;
     for (const k in this.mouseBtns) if (this.mouseBtns[k]) s[k] = true;
+    // Preserve taps that start and end between two render frames.
+    for (const action of this.pendingActions) s[action] = true;
+    this.pendingActions.clear();
+    this.wheelDelta = this.wheel;
     if (this.wheel > 0) s.nextWeapon = true; else if (this.wheel < 0) s.prevWeapon = true; this.wheel = 0;
 
     // movement from keys

@@ -14,6 +14,10 @@ import { RemotePlayer, encodeLocal } from './players.js';
 import { Net } from './net.js';
 import { HUD, CONTROLS_HTML } from './hud.js';
 import { audio } from './audio.js';
+import { inMeleeArc } from './combat.js';
+import { pickupPosition, needsPickup } from './supplies.js';
+import { SceneClock } from './sky.js';
+import { DUST_OUTLINE, DUST_ISLANDS } from './dust2.js';
 import { rand, choose, clamp } from './util.js';
 
 const canvas = document.getElementById('c');
@@ -22,15 +26,23 @@ const world = new World();
 const knownMap = (k) => (LEVELS.some((m) => m.key === k) ? k : 'district');
 let mapKey = knownMap(localStorage.getItem('doodle_map') || 'district');
 let level = buildLevel(R.scene, world, mapKey, { arena: false });
-let nav = new NavGrid(world, level.bounds, 1).build();
+let nav = new NavGrid(world, level.bounds, level.navCell || 1).build();
+R.post.uniforms.uDesert.value = mapKey === 'dust2' ? 1 : 0;
 let loadedKey = mapKey, arenaLoaded = false;
 audio.setTune(mapKey === 'mexico' ? 'mexico' : 'district');
 // the map in play: solo uses the picked map, a match uses the host's choice; a rebuild wipes broken props
 function setLevel(key, on, force = false) {
   if (!force && key === loadedKey && on === arenaLoaded) return; loadedKey = key; arenaLoaded = on;
-  for (const m of level.meshes) { R.scene.remove(m); if (m.geometry) m.geometry.dispose(); if (m.traverse) m.traverse((o) => { if (o !== m && o.geometry) o.geometry.dispose(); }); }
+  const geometries = new Set(), materials = new Set();
+  for (const m of level.meshes) {
+    R.scene.remove(m);
+    m.traverse(o => { if (o.geometry) geometries.add(o.geometry); if (o.material) for (const mat of Array.isArray(o.material) ? o.material : [o.material]) materials.add(mat); });
+  }
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
   level.animated.length = 0; world.clear();
-  level = buildLevel(R.scene, world, key, { arena: on }); nav = new NavGrid(world, level.bounds, 1).build();
+  level = buildLevel(R.scene, world, key, { arena: on }); nav = new NavGrid(world, level.bounds, level.navCell || 1).build();
+  R.post.uniforms.uDesert.value = key === 'dust2' ? 1 : 0;
   ctx.level = level; ctx.nav = nav; if (window.__game) { window.__game.level = level; window.__game.nav = nav; }
   audio.setTune(key === 'mexico' ? 'mexico' : 'district');
 }
@@ -44,7 +56,7 @@ const ctx = { scene: R.scene, camera: R.camera, world, level, nav, input, hud, e
 let best = Number(localStorage.getItem('doodle_best') || 0);
 let musicWanted = localStorage.getItem('doodle_music') !== '0';
 let checkpoint = Number(localStorage.getItem('doodle_checkpoint') || 0);
-let myName = (localStorage.getItem('doodle_name') || '').slice(0, 14) || '涂鸦' + Math.floor(Math.random() * 90 + 10);
+let myName = (localStorage.getItem('doodle_name') || '').slice(0, 14) || 'Doodle' + Math.floor(Math.random() * 90 + 10);
 const settings = { sens: Number(localStorage.getItem('doodle_sens') || 100), invert: localStorage.getItem('doodle_invert') === '1' };
 function applySettings() {
   input.mouseSens = 0.0022 * settings.sens / 100; input.padSensX = 3.4 * settings.sens / 100; input.padSensY = 2.6 * settings.sens / 100; input.invertY = settings.invert;
@@ -81,9 +93,10 @@ ctx.raycastPlayers = (o, d, maxDist) => {
     if (!t.alive || !ctx.canHurt(t)) continue;
     for (let i = 0; i < t.hit.length; i++) {
       const c = t.hitSpheres[i], r = t.hit[i][1];
-      _v.subVectors(c, o); const tca = _v.dot(d); if (tca < 0 || tca > maxDist) continue;
+      _v.subVectors(c, o); const tca = _v.dot(d);
       const d2 = _v.lengthSq() - tca * tca; if (d2 > r * r) continue;
-      const tt = tca - Math.sqrt(r * r - d2); if (tt < 0) continue;
+      const half = Math.sqrt(Math.max(0, r * r - d2)); if (tca + half < 0) continue;
+      const tt = Math.max(0, tca - half); if (tt > maxDist) continue;
       if (!best || tt < best.dist) best = { player: t, part: t.hit[i][0], dist: tt, point: new THREE.Vector3(o.x + d.x * tt, o.y + d.y * tt, o.z + d.z * tt) };
     }
     // a raised katana sits in front of the chest: a ray that reaches it before the body is turned aside
@@ -96,7 +109,11 @@ ctx.raycastPlayers = (o, d, maxDist) => {
   return best;
 };
 const _bc = new THREE.Vector3();
-ctx.playersInArc = (pos, dir, range, cosHalf) => { const out = []; for (const t of remote.values()) { if (!t.alive || !ctx.canHurt(t)) continue; _v.subVectors(t.center, pos); const d = _v.length(); if (d > range + 0.3) continue; if (d > 0.3 && _v.normalize().dot(dir) < cosHalf) continue; if (!world.hasLineOfSight(pos, t.center)) continue; out.push(t); } return out; };
+ctx.playersInArc = (pos, dir, range, cosHalf) => { const out = []; for (const t of remote.values()) { if (!t.alive || !ctx.canHurt(t)) continue; if (!inMeleeArc(pos, dir, t.center, 0.35, range, cosHalf)) continue; if (!world.hasLineOfSight(pos, t.center)) continue; out.push(t); } return out; };
+ctx.hitGrenadePlayer = (target, amount, from, explosionId, source = 'grenade') => {
+  if (!ctx.canHurt(target) || !target.alive) return;
+  net.sendTo(target.id, 'pdmg', { amount: Math.round(amount), from: from.toArray(), by: net.id, src: source, explosionId });
+};
 ctx.hitPlayer = (t, dmg, info) => {
   if (!ctx.canHurt(t) || !t.alive) return;
   // a raised katana facing you parries a slash outright and turns some bullets aside
@@ -105,16 +122,16 @@ ctx.hitPlayer = (t, dmg, info) => {
     effects.strokeBurst(info.point, INK.ORANGE, 8, 6, { life: 0.22, size: 0.035 }); audio.shieldHit(t.center);
     const ret = Math.random() < 0.4;
     if (ret) {
-      effects.tracer(info.point, player.eye, INK.RED, 0.03, 0.08); hud.tip('被弹回', 0.9); input.rumble(0.5, 0.4, 90);
+      effects.tracer(info.point, player.eye, INK.RED, 0.03, 0.08); hud.tip('Geri yollandı', 0.9); input.rumble(0.5, 0.4, 90);
       player.lastHitBy = t.id; player.lastHit = { from: t.center.toArray(), crit: false, amount: dmg * 0.6, src: 'deflect' }; player.takeDamage(dmg * 0.6, t.center);
-    } else hud.tip('被弹开', 0.7);
+    } else hud.tip('Savuşturuldu', 0.7);
     net.sendTo(t.id, 'parry', { ret, by: net.id });
     return;
   }
   const facing = t.blocking ? _v.subVectors(player.center, t.center).normalize().dot(t.forward) : -1;
   const frontHit = /^(head|torso|arm|fore)/.test(info.part || '');
   // a slash is only parried by a guard that just came up and faces you
-  if (facing > 0.6 && frontHit && info.source === 'katana' && t.parryWindow) { effects.strokeBurst(info.point, INK.ORANGE, 10, 6, { life: 0.25, size: 0.04 }); audio.shieldHit(t.center); game.hitstop(0.08, 0.15); player.weapons[player.katanaIndex].cooldown = Math.max(player.weapons[player.katanaIndex].cooldown, 0.6); input.rumble(0.6, 0.3, 90); hud.tip('被格挡', 0.9); return; }
+  if (facing > 0.6 && frontHit && info.source === 'katana' && t.parryWindow) { effects.strokeBurst(info.point, INK.ORANGE, 10, 6, { life: 0.25, size: 0.04 }); audio.shieldHit(t.center); game.hitstop(0.08, 0.15); player.weapons[player.katanaIndex].cooldown = Math.max(player.weapons[player.katanaIndex].cooldown, 0.6); input.rumble(0.6, 0.3, 90); hud.tip('Engellendi', 0.9); return; }
   effects.blood(info.point, info.dir, clamp(0.4 + dmg / 80, 0.4, 1.6), { ink: INK.RED }); hud.hitmarker(false, info.crit); audio.hitEnemy(t.center); t.flash();
   net.sendTo(t.id, 'pdmg', { amount: Math.round(dmg), from: player.center.toArray().map((v) => +v.toFixed(1)), by: net.id, crit: !!info.crit, src: info.source });
 };
@@ -128,7 +145,7 @@ ctx.cutRopes = (eye, dir, range) => {
     for (let i = 0; i <= 14; i++) {
       _rq.lerpVectors(_rp, r.gPoint, i / 14).sub(eye); const t = _rq.dot(dir); if (t < 0.3 || t > range) continue;
       const lat = Math.sqrt(Math.max(0, _rq.lengthSq() - t * t)); if (lat > 0.9) continue;
-      _rq.add(eye); effects.strokeBurst(_rq, INK.ORANGE, 10, 5, { life: 0.25, size: 0.035 }); net.sendTo(r.id, 'cut', {}); hud.tip('绳索切断', 0.9); cut = true; break;
+      _rq.add(eye); effects.strokeBurst(_rq, INK.ORANGE, 10, 5, { life: 0.25, size: 0.035 }); net.sendTo(r.id, 'cut', {}); hud.tip('İp kesildi', 0.9); cut = true; break;
     }
   }
   return cut;
@@ -139,8 +156,8 @@ ctx.breakHit = (br, dmg, point, dir) => {
   if (!br.alive) return; br.hp -= dmg;
   if (br.hp <= 0) breakProp(br, dir, true); else { effects.strokeBurst(point, br.ink, 5, 4, { life: 0.2, size: 0.03 }); audio.shieldHit(point); }
 };
-ctx.breakablesInArc = (pos, dir, range, cosHalf) => level.breakables.filter((br) => { if (!br.alive) return false; _v.subVectors(br.pos, pos); const d = _v.length(); return d < range + 0.5 && (d < 0.4 || _v.divideScalar(d).dot(dir) > cosHalf); });
-ctx.blastBreakables = (c, R) => { for (const br of level.breakables) if (br.alive && br.pos.distanceTo(c) < R * 0.9) breakProp(br, br.pos.clone().sub(c).normalize(), true); };
+ctx.breakablesInArc = (pos, dir, range, cosHalf) => level.breakables.filter(br => br.alive && inMeleeArc(pos, dir, br.pos, 0.5, range, cosHalf) && world.hasLineOfSight(pos, br.pos, box => box === br.box));
+ctx.blastBreakables = (c, R) => { const visible = level.breakables.filter(br => br.alive && br.pos.distanceTo(c) < R && world.hasLineOfSight(c, br.pos, box => box === br.box)); for (const br of visible) breakProp(br, br.pos.clone().sub(c).normalize(), true); };
 function breakProp(br, dir, local, quiet = false) {
   if (!br.alive) return; br.alive = false; world.removeBox(br.box);
   const g = br.group, pos = br.pos; const d = dir && dir.lengthSq() > 0.01 ? dir.clone().normalize() : new THREE.Vector3(rand(-1, 1), 1, rand(-1, 1)).normalize();
@@ -156,7 +173,7 @@ function breakProp(br, dir, local, quiet = false) {
   if (br.kind === 'pinata') {
     for (const ink of [INK.PINK, INK.ORANGE, INK.GREEN]) effects.strokeBurst(pos, ink, 16, 7, { life: 0.7, size: 0.05 });
     effects.explosion(pos, 2.5, INK.PINK); if (!net.active || net.isHost) for (let i = 0; i < 2; i++) spawnPickup('health', pos.clone().add(new THREE.Vector3(rand(-1.2, 1.2), 0, rand(-1.2, 1.2))));
-    if (game.mode === 'solo') game.addScore(25, '皮纳塔');
+    if (game.mode === 'solo') game.addScore(25, 'Piñata');
   } else if (br.kind === 'cactus') { effects.blood(pos, d, 1.4, { ink: INK.GREEN }); effects.bloodPool(new THREE.Vector3(pos.x, 0, pos.z), 1.1, INK.GREEN); }
   else { effects.strokeBurst(pos, br.ink, 12, 5, { life: 0.35, size: 0.04 }); effects.smoke(pos, up, 3); }
   audio.smash(pos, br.kind === 'barrel' || br.kind === 'crate' || br.kind === 'cactus');
@@ -165,7 +182,7 @@ function breakProp(br, dir, local, quiet = false) {
 // every ray a gun fires this tick is sent to the others, who draw it as a tracer from the shooter's gun
 const shotQueue = [];
 ctx.onShot = (end) => { if (net.active && inMatch()) shotQueue.push(+end.x.toFixed(1), +end.y.toFixed(1), +end.z.toFixed(1)); };
-const TRACER_THICK = { rifle: 0.02, shotgun: 0.014, sniper: 0.03 };
+const TRACER_THICK = { rifle: 0.02, shotgun: 0.014, sniper: 0.03, revolver: 0.026, smg: 0.016 };
 const _sm = new THREE.Vector3(), _se = new THREE.Vector3();
 
 // ---------------- pickups ----------------
@@ -179,20 +196,25 @@ function makePickup(kind) {
   return g;
 }
 function spawnPickup(kind, pos, id = null) {
-  const m = makePickup(kind); m.position.copy(pos); m.position.y += 0.6; R.scene.add(m);
-  const p = { id: id ?? pickupId++, kind, mesh: m, base: m.position.y, t: rand(0, 6), life: 45 }; pickups.push(p);
-  if (net.isHost) net.send('pickup', { id: p.id, kind, pos: pos.toArray() });
+  const position = pickupPosition(world, pos, [...level.pickups, level.playerStart]); if (!position) return null;
+  const m = makePickup(kind); m.position.copy(position); R.scene.add(m);
+  const p = { id: id ?? pickupId++, kind, mesh: m, base: m.position.y, t: rand(0, 6), life: 90 }; pickups.push(p);
+  if (net.isHost) net.send('pickup', { id: p.id, kind, pos: [position.x, position.y - 0.6, position.z] });
   return p;
 }
 function removePickup(p) { R.scene.remove(p.mesh); const i = pickups.indexOf(p); if (i >= 0) pickups.splice(i, 1); }
 function collectPickup(p) {
-  if (p.kind === 'ammo') { player.addAmmoAll(0.4); player.grenades = Math.min(player.maxGrenades, player.grenades + 1); hud.kill('+弹药 · +手雷', 0); } else { player.hp = Math.min(player.maxHp, player.hp + 35); hud.kill(level.key === 'mexico' ? '塔可 · +35 生命' : '+35 生命', 0); }
+  if (p.kind === 'ammo') { player.addAmmoAll(0.4); player.ordnance.resupply(); player.grenades = Math.min(player.maxGrenades, player.grenades + 1); hud.kill('+Cephane · +Bomba', 0); } else { player.hp = Math.min(player.maxHp, player.hp + 35); hud.kill(level.key === 'mexico' ? 'Taco · +35 can' : '+35 can', 0); }
   audio.pickup(); effects.strokeBurst(p.mesh.position, p.kind === 'ammo' ? INK.BLUE : INK.GREEN, 12, 4, { life: 0.3 });
 }
 function updatePickups(dt) {
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i]; p.t += dt; p.mesh.position.y = p.base + Math.sin(p.t * 2.5) * 0.12; p.mesh.rotation.y += dt * 1.8;
-    if (player.alive && p.mesh.position.distanceTo(player.center) < 1.5) {
+    const wanted = player.alive && needsPickup(p.kind, player);
+    const distance = p.mesh.position.distanceTo(player.center);
+    const visible = wanted && distance < 3.5 && world.hasLineOfSight(p.mesh.position, player.center);
+    if (visible && distance >= 1.8) { const pull = 1 - Math.exp(-8 * dt); p.mesh.position.x += (player.center.x - p.mesh.position.x) * pull; p.mesh.position.z += (player.center.z - p.mesh.position.z) * pull; p.base += (player.center.y - p.base) * pull; }
+    if (visible && distance < 1.8) {
       collectPickup(p); removePickup(p);
       if (net.active) net.send(net.isHost ? 'taken' : 'take', { id: p.id });
       continue;
@@ -212,40 +234,43 @@ const ROSTER = [
   { t: 'sniper', from: 3, w: 4 }, { t: 'flyer', from: 4, w: 4 }, { t: 'heavy', from: 5, w: 4 }, { t: 'shield', from: 6, w: 4 },
 ];
 const MODIFIERS = [
-  { name: '', apply: () => { enemies.mods.speed = 1; enemies.mods.damage = 1; } },
-  { name: '咖啡因 · 移动更快', apply: () => { enemies.mods.speed = 1.35; enemies.mods.damage = 0.85; } },
-  { name: '重墨 · 打人更疼', apply: () => { enemies.mods.speed = 0.9; enemies.mods.damage = 1.4; } },
-  { name: '蜂群 · 数量更多、个体更脆', apply: () => { enemies.mods.speed = 1.15; enemies.mods.damage = 0.9; } },
+  { name: '', apply: () => { enemies.mods.speed = 1; enemies.mods.damage = 1.2; enemies.mods.incomingDamage = 1.2; } },
+  { name: 'Kafein · Daha hızlı düşmanlar', apply: () => { enemies.mods.speed = 1.35; enemies.mods.damage = 1.02; enemies.mods.incomingDamage = 1.2; } },
+  { name: 'Koyu mürekkep · Daha sert saldırılar', apply: () => { enemies.mods.speed = 0.9; enemies.mods.damage = 1.68; enemies.mods.incomingDamage = 1.2; } },
+  { name: 'Sürü · Daha kalabalık, daha kırılgan', swarm: true, apply: () => { enemies.mods.speed = 1.15; enemies.mods.damage = 1.08; enemies.mods.incomingDamage = 1.5; } },
 ];
 const tips = () => [
-  `按住 <b>${hud.key('grapple')}</b> 收绳 · 摆动途中再按一次即可松手`,
-  `用 <b>${hud.key('block')}</b> 格挡，部分子弹会反弹回去`,
-  '空中击杀得分更高 · 尽量别落地',
-  `<b>${hud.key('grenade')}</b> 掷出手雷 · 拾取物可补充手雷`,
-  `在空中再按一次 <b>${hud.key('jump')}</b> 可二段跳`,
+  `Tutun: <b>${hud.key('grapple')}</b> basılı tut ve ipi sar · Bırak: tuşu bırak`,
+  `Mermin biterse <b>${hud._pad ? 'Yön tuşu aşağı' : '5'}</b>: sınırsız yedekli revolver`,
+  'Katana öldürmeleri cephane verir · F ile hızlı kes ve silahına dön',
+  `<b>${hud.key('grenade')}</b> basılı: atış yönü ve patlama alanı`,
+  `Havada tekrar <b>${hud.key('jump')}</b>: çift zıplama`,
 ];
 const bossFor = (n) => BOSSES[(Math.floor(n / 5) - 1) % BOSSES.length];
-const enemyName = (t) => ({ boss: '涂鸦魔王', eraser: '橡皮魔王', inkblot: '墨渍魔王' })[t] || t.toUpperCase();
+const enemyName = (t) => ({ boss: 'Karalayıcı', eraser: 'Silgi', inkblot: 'Mürekkep Lekesi' })[t] || t.toUpperCase();
 function startWave(n) {
+  player.ordnance.resupply();
   game.wave = n; game.queue = []; game.spawnT = 2; game.intermission = 0; game.boss = null; hud.setBoss(null, null);
   const boss = n > 0 && n % 5 === 0;
   const allowed = boss || n < 4 ? 1 : n < 6 ? 3 : MODIFIERS.length; const mod = MODIFIERS[Math.floor(Math.random() * allowed)];
-  mod.apply(); enemies.mods.damage *= 1.2; hud.setModifier(mod.name);
-  const swarm = mod.name.startsWith('蜂群');
+  mod.apply(); hud.setModifier(mod.name);
+  const swarm = !!mod.swarm;
   // the crowd on screen and the wave size both keep growing with the wave number
   game.maxAlive = Math.min(4 + Math.floor(n * 0.9) + (swarm ? 3 : 0), (swarm ? 22 : 18) + Math.floor(n / 3));
   let count = Math.round(Math.min(5 + n * 2.0, 32 + n) * (swarm ? 1.35 : 1));
   if (boss) { count = 7 + n; game.maxAlive += 2 + Math.floor(n / 5); game.queue.push(bossFor(n)); }
+  game.maxAlive = Math.min(game.maxAlive, 28);
   const pool = ROSTER.filter((r) => n >= r.from).map((r) => ({ t: r.t, w: r.w * Math.min(1, 0.3 + 0.25 * (n - r.from)) }));
   const total = pool.reduce((a, r) => a + r.w, 0);
   for (let i = 0; i < count; i++) { let r = Math.random() * total, t = pool[0].t; for (const c of pool) { r -= c.w; if (r <= 0) { t = c.t; break; } } game.queue.push(t); }
-  if (boss) { hud.message('第 ' + n + ' 波', enemyName(bossFor(n)) + ' 正在逼近', 3); audio.bossRoar(player.center); }
-  else hud.message('第 ' + n + ' 波', n === 1 ? '它们正从纸面外爬进来' : mod.name || choose(['画得更用力些', '继续涂涂画画', '别待在地面上', '挥刀上吧', '把子弹弹回去']), 2.6);
+  if (boss) { hud.message('DALGA ' + n, enemyName(bossFor(n)) + ' yaklaşıyor', 3); audio.bossRoar(player.center); }
+  else hud.message('DALGA ' + n, n === 1 ? 'İlk çizgiler geliyor · Hareket halinde kal' : mod.name || choose(['Çizgiyi boz', 'Mürekkebi akıt', 'Çatılara çık', 'Katanayla cephane kazan', 'Mermileri geri savuştur']), 2.6);
   audio.wave();
   if (n <= tips().length) hud.tip(tips()[n - 1], 7);
   player.grenades = Math.min(player.maxGrenades, player.grenades + 1);
+  player.addAmmoAll(0.1);
   for (let i = 0; i < 7; i++) spawnPickup(i < 5 ? 'ammo' : 'health', choose(level.pickups));
-  if (n >= 5 && n % 5 === 0 && n > checkpoint) { checkpoint = n; localStorage.setItem('doodle_checkpoint', String(n)); hud.kill('检查点 · 第 ' + n + ' 波', 0); }
+  if (n >= 5 && n % 5 === 0 && n > checkpoint) { checkpoint = n; localStorage.setItem('doodle_checkpoint', String(n)); hud.kill('Kontrol noktası · ' + n + '. dalga', 0); }
 }
 function pickSpawn(type) {
   const spots = type === 'sniper' ? level.snipers : level.spawns; const pp = player.body.pos;
@@ -264,7 +289,7 @@ function pickSpawn(type) {
 }
 function updateWaves(dt) {
   if (game.intermission > 0) {
-    game.intermission -= dt; hud.setTimer('下一波还有 ' + Math.ceil(game.intermission) + ' 秒');
+    game.intermission -= dt; hud.setTimer('Sonraki dalga: ' + Math.ceil(game.intermission) + ' sn');
     if (game.intermission <= 0) { hud.setTimer(''); startWave(game.wave + 1); }
     return;
   }
@@ -276,7 +301,7 @@ function updateWaves(dt) {
     }
   }
   if (!game.queue.length && enemies.alive === 0) {
-    game.intermission = 8; hud.message('第 ' + game.wave + ' 波已清除', '喘口气 · +' + 200 * game.wave, 2.5);
+    game.intermission = 8; hud.message('DALGA ' + game.wave + ' TAMAMLANDI', 'Nefeslen · +' + 200 * game.wave, 2.5);
     game.addScore(200 * game.wave, null); audio.waveClear(); player.hp = Math.min(player.maxHp, player.hp + 40);
   }
   hud.setWave(game.wave, enemies.alive + game.queue.length);
@@ -284,18 +309,25 @@ function updateWaves(dt) {
 enemies.onKill = (e, info, over) => {
   game.kills++; game.combo++; game.comboT = 3.5;
   let label = e.T.name, pts = e.T.score;
-  if (info.crit) { label = '爆头'; pts += 60; }
-  if (info.source === 'katana') { label = over ? '一刀两断' : '斩落'; pts += 50; }
-  if (info.source === 'focus') { label = '处决'; pts += 150; }
+  if (info.crit) { label = 'Kafadan vuruş'; pts += 60; }
+  if (info.source === 'katana') { label = over ? 'Tek kesik' : 'Kesildi'; pts += 50; }
+  if (info.source === 'focus') { label = 'Bitirici'; pts += 150; }
   if (info.source === 'katana' || info.source === 'focus') { game.katanaStreak++; player.weapons[player.katanaIndex].addBlood(0.42); if (game.katanaStreak >= KATANA_CHARGE_KILLS) enterFocus(); }
-  else if (info.source !== 'blast') game.katanaStreak = 0;
-  if (info.source === 'deflect') { label = '原路奉还'; pts += 120; }
-  if (info.source === 'fall') label = '坠出纸面';
-  else if (!player.body.onGround && info.source !== 'deflect') { label += ' · 空中击杀'; pts += 40; }
+  else if (!['blast', 'mine'].includes(info.source)) game.katanaStreak = 0;
+  if (info.source === 'deflect') { label = 'Geri yollandı'; pts += 120; }
+  if (info.source === 'fall') label = 'Sayfadan düştü';
+  else if (!player.body.onGround && info.source !== 'deflect') { label += ' · Havada av'; pts += 40; }
   game.addScore(pts, label); audio.kill(!!info.crit || e.T.boss);
+  if (game.mode === 'solo' && (info.source === 'katana' || info.source === 'focus')) player.addAmmoAll(0.04);
   const r = Math.random(); if (r < 0.5) spawnPickup('ammo', e.body.pos); else if (r < 0.62) spawnPickup('health', e.body.pos);
 };
 enemies.onBoss = (e) => { if (!e.alive) { hud.setBoss(null, null); game.boss = null; } else { game.boss = e; hud.setBoss(e.T.name, e.hp / e.maxHp); } };
+ctx.onOrdnance = d => { if (net.active) net.broadcast('ordnance', { ...d, map: level.key }); };
+net.on('ordnance', (d, from) => { if (d?.map === level.key) player.ordnance.receive(d, from); });
+net.on('mine-sync', (d, from) => {
+  if (!net.inMatch || d?.map !== level.key) return;
+  for (const m of player.ordnance.mines) net.sendTo(from, 'ordnance', { op: 'place', id: m.id, pos: m.pos.toArray(), map: level.key });
+});
 player.onThrow = (d) => { if (net.active) net.broadcast('nade', d); };
 
 // ---------------- focus slash (solo only) ----------------
@@ -316,7 +348,7 @@ function enterFocus() {
   if (online() || game.focus.chain >= FOCUS_MAX_CHAIN || !focusCandidate()) return;
   const fresh = !game.focus.active;
   game.focus.active = true; game.focus.t = FOCUS_TIME; game.focus.chain++; game.focus.arm = FOCUS_ARM; game.focus.ready = false;
-  if (fresh) { audio.focusIn(); hud.tip(`<b>斩击就绪</b> · 按住 ${hud.key('focus')} 冲刺`, 2.2); }
+  if (fresh) { audio.focusIn(); hud.tip(`<b>Katana atılışı hazır</b> · ${hud.key('focus')} basılı tut`, 2.2); }
 }
 function endFocus() { if (!game.focus.active && !game.focus.dash) return; game.focus.active = false; game.focus.target = null; game.focus.chain = 0; game.focus.dash = null; game.katanaStreak = 0; player.dashLock = false; hud.setFocusMark(null); }
 function startFocusDash(target) { game.focus.dash = { target, t: 0, trail: player.center.clone(), lastTrail: 0 }; player.dashLock = true; player.body.vel.set(0, 0, 0); audio.dash(); player.kickFov(5); input.rumble(0.5, 0.4, 120); hud.setFocusMark(null); }
@@ -340,7 +372,7 @@ function updateFocusDash(dt) {
   if (moved < 1e-4 && want > 0.05 && (d.stuckY || 0) > 0.08) { endDash(true); return true; }
   return false;
 }
-function endDash(blocked) { player.dashLock = false; game.focus.dash = null; player.body.vel.set(0, 0, 0); if (blocked) { player.weapons[player.katanaIndex].startSlash(player._weaponState(false, false, 0)); audio.katanaSwing(); hud.tip('被挡下 · 冲刺没能命中', 1.2); } }
+function endDash(blocked) { player.dashLock = false; game.focus.dash = null; player.body.vel.set(0, 0, 0); if (blocked) { player.weapons[player.katanaIndex].startSlash(player._weaponState(false, false, 0)); audio.katanaSwing(); hud.tip('Atılma engellendi', 1.2); } }
 function focusExecute(target) {
   player.dashLock = false; game.focus.dash = null; player.body.vel.set(0, 0, 0);
   player.weapons[player.katanaIndex].startSlash(player._weaponState(false, false, 0));
@@ -363,7 +395,7 @@ function updateFocus(dt) {
 }
 
 // ---------------- free for all: spawning, death, scoring ----------------
-const HOW = { rifle: '步枪', shotgun: '霰弹枪', sniper: '狙击枪', katana: '太刀', grenade: '手雷', deflect: '自己的子弹' };
+const HOW = { rifle: 'Tüfek', shotgun: 'Pompalı', sniper: 'Keskin nişancı', katana: 'Katana', revolver: 'Revolver', smg: 'SMG', ak47: 'AK-47', m4a1: 'M4A1', dual: 'Çift Tabanca', famas: 'FAMAS', m249: 'M249', dmr: 'DMR', mine: 'Mayın', grenade: 'Bomba', deflect: 'Seken mermi' };
 const howWord = (src) => HOW[src] || null;
 const spawnSpots = () => (level.arenaSpawns && level.arenaSpawns.length ? level.arenaSpawns : level.spawns);
 function arenaSpawn() {
@@ -387,10 +419,10 @@ function onLocalDeath() {
   if (net.isHost) tallyDeath(net.id, killer);
   game.respawnT = RESPAWN; game.state = 'dying'; game.deathT = 0;
   const kn = killer && scores.get(killer) ? scores.get(killer).name : null;
-  hud.kill(kn ? '被 ' + kn + ' 抹除' + (how ? ' · ' + how + (h.crit ? ' 爆头' : '') : '') : '被抹除', 0);
+  hud.kill(kn ? kn + ' seni eledi' + (how ? ' · ' + how + (h.crit ? ' Kafadan vuruş' : '') : '') : 'Mürekkebin tükendi', 0);
 }
 function respawnLocal() {
-  player.reset(arenaSpawn()); player.name = myName; player.lastHitBy = null; player.lastHit = null; game.state = 'play'; player.shieldT = 2; hud.tip('重生保护 · 2 秒', 1.6);
+  player.reset(arenaSpawn()); player.name = myName; player.lastHitBy = null; player.lastHit = null; game.state = 'play'; player.shieldT = 2; hud.tip('Doğma koruması · 2 sn', 1.6);
   effects.strokeBurst(player.center, INK.BLUE, 24, 6, { life: 0.5, size: 0.03 }); audio.spawn(player.center);
 }
 function tallyDeath(victim, killer) {
@@ -405,13 +437,13 @@ function refreshScoreHud() {
   if (!online()) return;
   const rows = sortedScores(); const top = rows.slice(0, 3); const myIdx = rows.findIndex(([id]) => id === net.id);
   if (myIdx >= 3) top.push(rows[myIdx]);
-  hud.setPvpScore(top.map(([id, sc]) => `<div class="row${id === net.id ? ' me' : ''}"><span class="rank">${rows.findIndex(([x]) => x === id) + 1}.</span><span>${esc(sc.name)}${id === net.id ? ' (你)' : ''}</span><b>${sc.kills}</b></div>`).join('') + `<div class="target">先到 ${FFA_TARGET} 杀</div>`);
+  hud.setPvpScore(top.map(([id, sc]) => `<div class="row${id === net.id ? ' me' : ''}"><span class="rank">${rows.findIndex(([x]) => x === id) + 1}.</span><span>${esc(sc.name)}${id === net.id ? ' (sen)' : ''}</span><b>${sc.kills}</b></div>`).join('') + `<div class="target">Hedef: ${FFA_TARGET} öldürme</div>`);
   hud.setModifier('');
   if (!hud.el.board.hidden) hud.setBoard(boardHTML());
 }
-function boardHTML(title = '自由混战') {
+function boardHTML(title = 'Herkes tek') {
   const rows = sortedScores();
-  return `<h3>${title}</h3>${rows.map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${s.name}${id === net.id ? ' (你)' : ''}</span><span>${s.kills} 杀 · ${s.deaths} 死</span></div>`).join('')}<div class="foot">先到 ${FFA_TARGET} 杀 · 还剩 ${mmss(matchLeft)} · 大厅 ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</div>`;
+  return `<h3>${title}</h3>${rows.map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}${id === net.id ? ' (sen)' : ''}</span><span>${s.kills} öldürme · ${s.deaths} ölüm</span></div>`).join('')}<div class="foot">Hedef: ${FFA_TARGET} öldürme · Kalan ${mmss(matchLeft)} · Oda ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</div>`;
 }
 function checkWin() {
   if (!net.isHost || !online() || game.over) return;
@@ -421,8 +453,8 @@ function checkWin() {
 }
 function endMatch(winner) {
   game.over = winner; game.overT = 0; game.state = 'over'; endFocus(); input.exitLock(); hud.setBoard(null);
-  const title = winner.id === net.id ? '你赢了' : (winner.name || '有人') + ' 获胜';
-  hud.setGameplayVisible(false); hud.showScreen(`<h1>${title}</h1><div class="scoreboard">${sortedScores().map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${s.name}</span><span>${s.kills} 杀 · ${s.deaths} 死</span></div>`).join('')}</div><div class="go" id="overGo">马上返回大厅…</div>`);
+  const title = winner.id === net.id ? 'Kazandın' : (winner.name || 'Oyuncu') + ' kazandı';
+  hud.setGameplayVisible(false); hud.showScreen(`<h1>${esc(title)}</h1><div class="scoreboard">${sortedScores().map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} öldürme · ${s.deaths} ölüm</span></div>`).join('')}</div><div class="go" id="overGo">Odaya dönülüyor…</div>`);
 }
 
 // ---------------- networking ----------------
@@ -432,12 +464,12 @@ function addRemote(id, name) {
   rp.onDamage = (t, amount, fromPos) => { if (!ctx.canHurt(t) || !t.alive) return; hud.hitmarker(false, false); net.sendTo(t.id, 'pdmg', { amount: Math.round(amount), from: fromPos ? fromPos.toArray().map((v) => +v.toFixed(1)) : null, by: net.id, src: 'grenade' }); };
   remote.set(id, rp); return rp;
 }
-function removeRemote(id) { const r = remote.get(id); if (r) { r.dispose(); remote.delete(id); } lobby.players.delete(id); scores.delete(id); }
+function removeRemote(id) { player.ordnance.removePeer(id); const r = remote.get(id); if (r) { r.dispose(); remote.delete(id); } lobby.players.delete(id); scores.delete(id); }
 function lobbyRows() { return [...lobby.players.entries()].map(([id, p]) => ({ id, name: p.name })); }
 function broadcastLobby() { net.send('lobby', { players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, shown: net.aliasCode || net.code }); renderLobby(); }
 const inMatch = () => ['play', 'dying', 'over'].includes(game.state);
-net.onPeerLeave = (id) => { const nm = (lobby.players.get(id) || {}).name; removeRemote(id); broadcastLobby(); if (inMatch()) { hud.kill((nm || '某人') + ' 离开了', 0); sendScores(); } };
-net.onDisconnect = () => { if (lobby.order && lobby.order.some((id) => id !== lobby.hostId)) migrateHost(); else leaveOnline('房主离开了大厅'); };
+net.onPeerLeave = (id) => { const nm = (lobby.players.get(id) || {}).name; removeRemote(id); broadcastLobby(); if (inMatch()) { hud.kill((nm || 'Oyuncu') + ' ayrıldı', 0); sendScores(); } };
+net.onDisconnect = () => { if (lobby.order && lobby.order.some((id) => id !== lobby.hostId)) migrateHost(); else leaveOnline('Oda sahibi ayrıldı'); };
 // ---- host transfer: when the host goes, the earliest-joined player left takes over on a generation
 // code (the old code is slow to free up on the signalling server); everyone else rejoins there
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -446,25 +478,25 @@ async function migrateHost() { if (migrating) return; migrating = true; try { aw
 async function _migrateHost() {
   const oldHost = lobby.hostId, myId = net.id; const gen = (lobby.gen || 0) + 1; lobby.gen = gen;
   const base = (lobby.code || net.code || '').replace(/-\d+$/, ''); const code = base + '-' + gen;
-  const roster = (lobby.order || []).filter((id) => id !== oldHost && lobby.players.has(id)); if (!roster.length || !base) { leaveOnline('房主离开了大厅'); return; }
+  const roster = (lobby.order || []).filter((id) => id !== oldHost && lobby.players.has(id)); if (!roster.length || !base) { leaveOnline('Oda sahibi ayrıldı'); return; }
   const successor = roster[0]; const wasInMatch = inMatch();
   if (oldHost) { const r = remote.get(oldHost); if (r) r.dispose(); remote.delete(oldHost); lobby.players.delete(oldHost); scores.delete(oldHost); }
-  hud.message('房主离开了', successor === myId ? '现在由你担任房主' : '正在迁往新房主…', 2.6);
+  hud.message('Oda sahibi ayrıldı', successor === myId ? 'Yeni oda sahibi sensin' : 'Yeni oda sahibine bağlanılıyor…', 2.6);
   if (successor === myId) {
     let ok = false;
     for (let tries = 0; tries < 2 && !ok; tries++) { try { await net.host({ isPublic: lobby.isPublic, code }); ok = true; } catch (e) { await sleep(800); } }
-    if (!ok) { leaveOnline('无法接管大厅'); return; }
+    if (!ok) { leaveOnline('Oda devralınamadı'); return; }
     const mine = lobby.players.get(myId) || { name: myName }; lobby.players.delete(myId); lobby.players.set(net.id, mine);
     const ms = scores.get(myId); scores.delete(myId); if (ms) scores.set(net.id, ms);
     lobby.hostId = net.id; lobby.code = code; lobby.order = [net.id, ...roster.filter((id) => id !== myId)]; net.accepting = true; game.clockStarted = clockRunning || matchLeft < FFA_TIME;
-    net.onAlias = () => { broadcastLobby(); hud.kill('大厅代码 ' + base + ' 已恢复', 0); }; net.claimAlias(base);
+    net.onAlias = () => { broadcastLobby(); hud.kill('Oda kodu ' + base + ' yeniden açıldı', 0); }; net.claimAlias(base);
     if (game.state === 'over') { /* the results stay up; the host timer now runs here */ } else if (wasInMatch) { if (game.state !== 'play' && game.state !== 'dying') game.state = 'play'; refreshScoreHud(); } else { game.state = 'lobby'; screen = 'lobby'; showStart(); }
     broadcastLobby();
   } else {
     await sleep(1200);
     const deadline = performance.now() + 20000; let joined = false;
     while (!joined && performance.now() < deadline) { try { await net.join(code, { name: myName, prev: myId }); joined = true; } catch (e) { await sleep(1200); } }
-    if (!joined) { leaveOnline('房主离开，对局已丢失'); return; }
+    if (!joined) { leaveOnline('Oda sahibi ayrıldı, bağlantı yeniden kurulamadı'); return; }
     lobby.code = code; if (!wasInMatch) { game.state = 'lobby'; screen = 'lobby'; showStart(); }
   }
 }
@@ -474,7 +506,7 @@ net.onPeerJoin = (from, meta) => {
   const name = String(meta && meta.name || 'doodle').slice(0, 14);
   if (meta && meta.prev && meta.prev !== from) { const sc = scores.get(meta.prev); if (sc) { scores.delete(meta.prev); scores.set(from, sc); } const r = remote.get(meta.prev); if (r) r.dispose(); remote.delete(meta.prev); lobby.players.delete(meta.prev); if (lobby.order) lobby.order = lobby.order.filter((id) => id !== meta.prev); }
   lobby.players.set(from, { name }); addRemote(from, name); broadcastLobby();
-  if (game.state === 'play' || game.state === 'dying') { if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn: farthestSpawnIndex(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ' 加入了', 0); }
+  if (game.state === 'play' || game.state === 'dying') { if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn: farthestSpawnIndex(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ' katıldı', 0); }
 };
 net.on('lobby', (d) => {
   lobby.hostId = d.hostId; lobby.isPublic = !!d.isPublic; lobby.code = net.code; lobby.shown = d.shown || net.code; if (d.map) lobby.map = knownMap(d.map); lobby.order = d.players.map((p) => p.id); lobby.players.clear();
@@ -484,7 +516,7 @@ net.on('lobby', (d) => {
   if (inMatch()) { for (const p of d.players) if (!scores.has(p.id)) scores.set(p.id, { name: p.name, kills: 0, deaths: 0 }); refreshScoreHud(); }
   renderLobby();
 });
-net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || '某人') + ' 离开了', 0); renderLobby(); });
+net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || 'Oyuncu') + ' ayrıldı', 0); renderLobby(); });
 net.on('start', (d) => { if (net.isHost) return; if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
 net.on('startreq', () => { if (net.isHost && game.state === 'lobby') hostStart(); });
 net.on('end', (d) => endMatch(d));
@@ -493,21 +525,24 @@ net.on('pickup', (d) => { if (!net.isHost) spawnPickup(d.kind, new THREE.Vector3
 net.on('taken', (d) => { const p = pickups.find((x) => x.id === d.id); if (p) removePickup(p); });
 net.on('take', (d) => { if (!net.isHost) return; const p = pickups.find((x) => x.id === d.id); if (p) { removePickup(p); net.send('taken', { id: d.id }); } });
 net.on('ps', (d, from) => { const r = remote.get(from); if (r) { r.push(d, performance.now() / 1000); r.lastSeen = performance.now(); } });
-net.on('pdmg', (d) => {
+const appliedExplosions = new Set();
+net.on('pdmg', (d, from) => {
+  if (!d || !Number.isFinite(d.amount) || d.amount <= 0 || d.amount > 1000 || (d.from && (!Array.isArray(d.from) || d.from.length !== 3 || !d.from.every(Number.isFinite)))) return;
+  if (d.explosionId) { const key = `${from}:${d.explosionId}`; if (appliedExplosions.has(key)) return; appliedExplosions.add(key); if (appliedExplosions.size > 512) appliedExplosions.delete(appliedExplosions.values().next().value); }
   if (!player.alive || game.state !== 'play' || player.shieldT > 0) return; player.lastHitBy = d.by || null; player.lastHit = { from: d.from || null, crit: !!d.crit, amount: d.amount, src: d.src };
   player.takeDamage(d.amount, d.from ? new THREE.Vector3().fromArray(d.from) : null);
 });
 net.on('pdead', (d, from) => {
-  const r = remote.get(from); const vn = r ? r.name : '某人'; const kn = d.killer && scores.get(d.killer) ? scores.get(d.killer).name : null;
+  const r = remote.get(from); const vn = r ? r.name : 'Oyuncu'; const kn = d.killer && scores.get(d.killer) ? scores.get(d.killer).name : null;
   if (r) { r.ragdoll(d.dir ? new THREE.Vector3().fromArray(d.dir) : null, !!d.over); audio.enemyDie(r.center); }
-  const how = d.how ? ' · ' + d.how + (d.crit ? ' 爆头' : '') : '';
-  if (d.killer === net.id) { game.kills++; game.addScore(100, '抹除 ' + vn + how); audio.kill(true); }
-  else hud.kill(kn ? kn + ' 抹除了 ' + vn + how : vn + ' 坠出纸面', 0);
+  const how = d.how ? ' · ' + d.how + (d.crit ? ' Kafadan vuruş' : '') : '';
+  if (d.killer === net.id) { game.kills++; game.addScore(100, 'Eledin: ' + vn + how); audio.kill(true); }
+  else hud.kill(kn ? kn + ' eledi ' + vn + how : vn + ' Sayfadan düştü', 0);
   if (net.isHost) tallyDeath(from, d.killer);
 });
-net.on('nade', (d) => player.throwGrenade(d));
+net.on('nade', (d, from) => { if (d) player.throwGrenade({ ...d, id: `${from}:${d.id || ''}` }); });
 net.on('brk', (d) => { const br = level.breakables[d.id]; if (br) breakProp(br, null, false); });
-net.on('parry', (d) => { audio.shieldHit(player.center); input.rumble(0.35, 0.3, 60); effects.strokeBurst(player.eye.clone().addScaledVector(player.forward, 0.5), INK.ORANGE, 8, 5, { life: 0.2, size: 0.03 }); hud.kill(d.ret ? '原路奉还' : '被弹开', d.ret ? 25 : 0); });
+net.on('parry', (d) => { audio.shieldHit(player.center); input.rumble(0.35, 0.3, 60); effects.strokeBurst(player.eye.clone().addScaledVector(player.forward, 0.5), INK.ORANGE, 8, 5, { life: 0.2, size: 0.03 }); hud.kill(d.ret ? 'Geri yollandı' : 'Savuşturuldu', d.ret ? 25 : 0); });
 net.on('shots', (d, from) => {
   const r = remote.get(from); if (!r || !r.root || !r.alive) return;
   _sm.set(r.body.pos.x + r.right.x * 0.3 + r.forward.x * 0.8, r.body.pos.y + 1.35 + r.forward.y * 0.8, r.body.pos.z + r.right.z * 0.3 + r.forward.z * 0.8);
@@ -515,14 +550,14 @@ net.on('shots', (d, from) => {
   for (let i = 0; i + 2 < e.length; i += 3) { _se.set(e[i], e[i + 1], e[i + 2]); effects.tracer(_sm, _se, INK.BLUE, th, 0.06); }
   r.flash(); audio.remoteShot(d.k, _sm);
 });
-net.on('cut', () => { if (player.grapple.state !== 'idle') { player.detachGrapple(false); effects.strokeBurst(player.center, INK.ORANGE, 8, 4, { life: 0.25, size: 0.03 }); hud.tip('你的绳索被割断了', 1.3); input.rumble(0.5, 0.3, 80); } });
+net.on('cut', () => { if (player.grapple.state !== 'idle') { player.detachGrapple(false); effects.strokeBurst(player.center, INK.ORANGE, 8, 4, { life: 0.25, size: 0.03 }); hud.tip('İpin kesildi', 1.3); input.rumble(0.5, 0.3, 80); } });
 net.on('score', (rows) => { if (!net.isHost) applyScores(rows); });
-net.on('fell', (d, from) => { if (!net.isHost) return; const sc = scores.get(from); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { text: sc.name + ' 坠出纸面 · -1' }); hud.kill(sc.name + ' 坠出纸面 · -1', 0); } });
+net.on('fell', (d, from) => { if (!net.isHost) return; const sc = scores.get(from); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { text: sc.name + ' Sayfadan düştü · -1' }); hud.kill(sc.name + ' Sayfadan düştü · -1', 0); } });
 net.on('feed', (d) => hud.kill(String(d.text || ''), 0));
 player.onFall = () => {
   if (!online() || !inMatch()) return;
-  hud.kill('坠出纸面 · 击杀 -1', 0);
-  if (net.isHost) { const sc = scores.get(net.id); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { text: sc.name + ' 坠出纸面 · -1' }); } }
+  hud.kill('Sayfadan düştü · Öldürme -1', 0);
+  if (net.isHost) { const sc = scores.get(net.id); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { text: sc.name + ' Sayfadan düştü · -1' }); } }
   else net.send('fell', {});
 };
 net.on('clock', (d) => { if (!net.isHost) { matchLeft = d.left; clockRunning = !!d.on; } });
@@ -537,25 +572,32 @@ function idleUpdate(dt) {
   const othersActive = [...remote.values()].some((r) => !r.idle);
   // a host that still has active players stays; kicking it would end their match
   const canDrop = !net.isHost || !othersActive;
-  if (idle > limit - IDLE_WARN && !idleWarned && canDrop) { idleWarned = true; hud.message('还在吗？', '动一动吧，否则会因挂机被移出', 3); audio.empty(); }
+  if (idle > limit - IDLE_WARN && !idleWarned && canDrop) { idleWarned = true; hud.message('Hâlâ burada mısın?', 'Hareketsiz kalırsan odadan çıkarılacaksın.', 3); audio.empty(); }
   if (idle <= limit - IDLE_WARN) idleWarned = false;
-  if (idle > limit && canDrop) { const back = net.isHost ? null : String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(net.isHost ? '大厅已关闭：全员挂机' : '因挂机被移出'); lobby.rejoinCode = back; if (back) showStart(); return; }
+  if (idle > limit && canDrop) { const back = net.isHost ? null : String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(net.isHost ? 'Oda kapandı: tüm oyuncular hareketsiz' : 'Hareketsizlik nedeniyle odadan çıkarıldın'); lobby.rejoinCode = back; if (back) showStart(); return; }
   // the host also clears out a client that has sat idle past the limit, in case its tab cannot do it itself
-  if (net.isHost) for (const [id, r] of remote) if (r.idle && r.idleSince && performance.now() / 1000 - r.idleSince > limit - IDLE_FLAG + 15) { net.sendTo(id, 'kick', { reason: '因挂机被移出' }); const c = net.conns.get(id); setTimeout(() => { try { c && c.close(); } catch (e) { /* ignore */ } }, 500); }
+  if (net.isHost) for (const [id, r] of remote) if (r.idle && r.idleSince && performance.now() / 1000 - r.idleSince > limit - IDLE_FLAG + 15) { net.sendTo(id, 'kick', { reason: 'Hareketsizlik nedeniyle odadan çıkarıldın' }); const c = net.conns.get(id); setTimeout(() => { try { c && c.close(); } catch (e) { /* ignore */ } }, 500); }
 }
-net.on('kick', (d) => { const back = String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(d && d.reason || '被移出'); lobby.rejoinCode = back; if (back) showStart(); });
+net.on('kick', (d) => { const back = String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(d && d.reason || 'Odadan çıkarıldın'); lobby.rejoinCode = back; if (back) showStart(); });
+const sceneClock = new SceneClock();
+let scenePingT = 0, sceneHost = null;
+net.on('scene-ping', (d, from) => { if (net.isHost && Number.isInteger(d?.id)) net.sendTo(from, 'scene-pong', { id: d.id, time: sceneClock.time() }); });
+net.on('scene-pong', (d, from) => { if (!net.isHost && from === net.hostId) sceneClock.accept(d); });
+Object.assign(window.__game, { sceneClock });
 let syncTick = 0;
 function netUpdate(dt) {
   idleUpdate(dt);
   if (!net.active) return; const now = performance.now() / 1000; syncTick++;
+  if (sceneHost !== net.hostId) { sceneHost = net.hostId; sceneClock.changeHost(); scenePingT = 0; }
+  if (!net.isHost) { scenePingT -= dt; if (scenePingT <= 0) { scenePingT = 1; net.send('scene-ping', sceneClock.request()); } }
   for (const r of remote.values()) r.update(dt, now);
   // a connection that died without saying so leaves a figure standing around: drop anyone silent too long
-  if (inMatch() && !migrating) for (const [id, r] of remote) { if (r.lastSeen && performance.now() - r.lastSeen > 9000) { if (!net.isHost && id === net.hostId) { net.leave(); migrateHost(); break; } const nm = r.name; removeRemote(id); hud.kill(nm + ' 连接中断', 0); if (net.isHost) { const c = net.conns.get(id); if (c) { try { c.close(); } catch (e) { /* ignore */ } net.conns.delete(id); } net.send('leave', { id }); broadcastLobby(); sendScores(); } } }
+  if (inMatch() && !migrating) for (const [id, r] of remote) { if (r.lastSeen && performance.now() - r.lastSeen > 9000) { if (!net.isHost && id === net.hostId) { net.leave(); migrateHost(); break; } const nm = r.name; removeRemote(id); hud.kill(nm + ' bağlantısı kesildi', 0); if (net.isHost) { const c = net.conns.get(id); if (c) { try { c.close(); } catch (e) { /* ignore */ } net.conns.delete(id); } net.send('leave', { id }); broadcastLobby(); sendScores(); } } }
   if (syncTick % 3 === 0 && inMatch()) net.send('ps', encodeLocal(player, player.weaponIndex, { firing: player.firing, idle: input.idleSeconds > IDLE_FLAG }), true);
   if (shotQueue.length) net.broadcast('shots', { k: player.weapon.kind, e: shotQueue.splice(0) });
   if (net.isHost && inMatch() && remote.size > 0) game.clockStarted = true;
   const clockOn = inMatch() && !game.over && (net.isHost ? !!game.clockStarted : clockRunning);
-  if (inMatch() && !game.over) { if (clockOn) matchLeft = Math.max(0, matchLeft - dt); if (net.isHost) { clockT -= dt; if (clockT <= 0) { clockT = 2; net.send('clock', { left: Math.round(matchLeft), on: clockOn }); } } hud.setTimer(clockOn ? mmss(matchLeft) : '有玩家加入后开始计时'); }
+  if (inMatch() && !game.over) { if (clockOn) matchLeft = Math.max(0, matchLeft - dt); if (net.isHost) { clockT -= dt; if (clockT <= 0) { clockT = 2; net.send('clock', { left: Math.round(matchLeft), on: clockOn }); } } hud.setTimer(clockOn ? mmss(matchLeft) : 'Bir oyuncu katılınca süre başlayacak'); }
   if (net.isHost && clockOn) { game.matchT += dt; if (matchLeft <= 0) { const rows = sortedScores(); const w = rows.length ? { id: rows[0][0], name: rows[0][1].name } : { id: net.id, name: myName }; net.send('end', w); endMatch(w); } }
 }
 function leaveOnline(reason) {
@@ -564,31 +606,31 @@ function leaveOnline(reason) {
   game.menu = false; lobby.status = reason || ''; screen = 'online'; showStart();
 }
 async function createLobby(isPublic) {
-  setStatus('正在创建大厅…');
+  setStatus('Oda oluşturuluyor…');
   try { await net.host({ isPublic }); }
   catch (err) { setStatus(friendlyError(err)); unlockButtons(); return; }
   lobby.isPublic = isPublic; lobby.map = mapKey; lobby.players.clear(); lobby.players.set(net.id, { name: myName }); lobby.hostId = net.id; lobby.status = '';
   game.state = 'lobby'; screen = 'lobby'; showStart();
 }
 async function joinLobby(code) {
-  setStatus('正在连接…');
+  setStatus('Bağlanıyor…');
   try { await net.join(code, { name: myName }); } catch (err) { setStatus(friendlyError(err)); unlockButtons(); return; }
   lobby.isPublic = net.isPublic; lobby.status = ''; game.state = 'lobby'; screen = 'lobby'; showStart();
 }
 async function quickPlay() {
   try { await net.quickJoin({ name: myName }, setStatus); lobby.isPublic = true; lobby.status = ''; game.state = 'lobby'; screen = 'lobby'; showStart(); return; }
   catch (err) { if (!/no open public/.test(String(err.message))) { setStatus(friendlyError(err)); unlockButtons(); return; } }
-  setStatus('暂无开放的大厅 · 正在为你开一个公开大厅…');
+  setStatus('Açık oda yok · Yeni oda oluşturuluyor…');
   await createLobby(true);
 }
 function friendlyError(err) {
-  const m = String(err && err.message || err || ''); if (!m) return '出了点问题';
-  if (/networking library/.test(m)) return '无法加载联机库 · 请检查网络并刷新页面';
-  if (/timed out|signalling/.test(m)) return '无法连接匹配服务器 · 请检查你的网络';
-  if (/no lobby with that code/.test(m)) return '找不到该代码对应的大厅 · 和朋友核对一下代码';
-  if (/no answer/.test(m)) return '找到了大厅但无法连接 · 你们中可能有人处于阻止直连的网络';
-  if (/full/.test(m)) return '该大厅已满 · 试试其他代码';
-  if (/leave the lobby/.test(m)) return '请先离开你当前的大厅';
+  const m = String(err && err.message || err || ''); if (!m) return 'Bir sorun oluştu';
+  if (/networking library/.test(m)) return 'Bağlantı kütüphanesi yüklenemedi · İnternetini kontrol edip sayfayı yenile.';
+  if (/timed out|signalling/.test(m)) return 'Eşleşme sunucusuna bağlanılamadı · İnternetini kontrol et.';
+  if (/no lobby with that code/.test(m)) return 'Oda bulunamadı · Oda kodunu arkadaşınla kontrol et.';
+  if (/no answer/.test(m)) return 'Oda bulundu ama doğrudan bağlantı kurulamadı · Farklı bir ağ deneyin.';
+  if (/full/.test(m)) return 'Oda dolu · Başka bir odaya katıl.';
+  if (/leave the lobby/.test(m)) return 'Önce mevcut odadan ayrıl.';
   return m;
 }
 function setStatus(t) { lobby.status = t; const el = hud.el.panel.querySelector('#status'); if (el) el.textContent = t; }
@@ -596,9 +638,9 @@ function setStatus(t) { lobby.status = t; const el = hud.el.panel.querySelector(
 // ---------------- screens ----------------
 function settingsHTML() {
   return `<div class="settings" id="settings">
-    <label>鼠标灵敏度 <input type="range" id="setSens" min="25" max="250" step="5" value="${settings.sens}"><b id="setSensV">${settings.sens}%</b></label>
-    <label><input type="checkbox" id="setInv" ${settings.invert ? 'checked' : ''}> 反转垂直视角</label>
-    <label><input type="checkbox" id="setMus" ${musicWanted ? 'checked' : ''}> 音乐 <span class="k">(M)</span></label>
+    <label>Fare hassasiyeti <input type="range" id="setSens" min="25" max="250" step="5" value="${settings.sens}"><b id="setSensV">${settings.sens}%</b></label>
+    <label><input type="checkbox" id="setInv" ${settings.invert ? 'checked' : ''}> Dikey bakışı ters çevir</label>
+    <label><input type="checkbox" id="setMus" ${musicWanted ? 'checked' : ''}> Müzik <span class="k">(M)</span></label>
   </div>`;
 }
 function wireSettings() {
@@ -615,58 +657,84 @@ function wireName(box) {
 }
 function checkpointHTML() {
   if (checkpoint < 5) return '';
-  let h = '<div class="checkpoints"><span>检查点</span>';
-  for (let w = 5; w <= checkpoint; w += 5) h += `<button type="button" data-cp="${w}">第 ${w} 波</button>`;
+  let h = '<div class="checkpoints"><span>Kontrol noktası</span>';
+  for (let w = 5; w <= checkpoint; w += 5) h += `<button type="button" data-cp="${w}">${w}. dalga</button>`;
   return h + '</div>';
 }
 function wireCheckpoints(onGo) { const box = hud.el.panel.querySelector('.checkpoints'); if (!box) return; box.addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('button'); if (b) onGo(Number(b.dataset.cp)); }); }
 const mapName = (k) => (LEVELS.find((m) => m.key === k) || LEVELS[0]).name;
-function mapHTML(sel, canPick) { if (LEVELS.length < 2) return ''; return `<div class="mapsel" id="mapsel"><span>地图</span>${LEVELS.map((m) => `<button type="button" class="mapbtn${m.key === sel ? ' on' : ''}" data-map="${m.key}" ${canPick ? '' : 'disabled'}>${m.name}<i>${m.blurb}</i></button>`).join('')}</div>`; }
+function mapSketch(key) {
+  if (key === 'dust2') {
+    const outline = [DUST_OUTLINE, ...DUST_ISLANDS].map(poly => 'M' + poly.map(([x,z]) => `${((x-640)*.145).toFixed(1)},${((z-360)*.145).toFixed(1)}`).join('L') + 'Z').join('');
+    return `<svg class="map-sketch" viewBox="-56 -56 112 112" aria-hidden="true"><path d="${outline}" fill="currentColor" fill-opacity=".16" fill-rule="evenodd"/></svg>`;
+  }
+  const shapes = {
+    district: [[-43, 4, 18, 16], [24, 4, 20, 16], [-7, -7, 14, 14], [-48, -34, 96, 8]],
+    harbor: [[-28, -26, 12, 14], [16, -26, 12, 14], [-28, 12, 12, 14], [16, 12, 12, 14], [-39, -27, 6, 10], [-39, -5, 6, 10], [-39, 17, 6, 10], [33, -27, 6, 10], [33, -5, 6, 10], [33, 17, 6, 10], [-34, -32, 68, 2]],
+    canyon: [[-40, -28, 24, 56], [16, -28, 24, 56], [-16, -14, 32, 4], [-16, 10, 32, 4]],
+    forest: [[-37,-35,6,70],[31,-35,6,70],[-27,-24,8,8],[19,-24,8,8],[-14,15,5,2],[9,-17,5,2]],
+    duel: [[-38,-38,76,76],[-20,-16,8,3],[12,-16,8,3],[-20,12,8,3],[12,12,8,3],[-3,-3,6,6]],
+    meadow: [[-16,-24,32,44],[-14,-24,4,48],[10,-24,4,48],[-29,-34,8,8],[21,-34,8,8]],
+    gardens: [[-25, -25, 16, 16], [9, -25, 16, 16], [-25, 9, 16, 16], [9, 9, 16, 16], [-19, -2, 38, 4], [-6, -6, 12, 12]],
+    deepforest: [[-40,-40,14,12],[25,-35,14,12],[-34,22,12,12],[24,24,12,12],[-15,-35,4,14],[10,-5,4,20],[-16,16,4,25]],
+    lostwoods: [[-43,-40,20,4],[-43,-36,4,16],[23,-34,20,4],[39,-30,4,16],[-35,22,18,4],[23,25,18,4],[-8,-28,5,18],[8,8,5,20]],
+    skyline: [-36,-18,0,18,36].flatMap(x => [-36,-18,0,18,36].filter(z => x || z).map(z => [x-6,z-6,12,12])),
+  };
+  return `<svg class="map-sketch" viewBox="-56 -56 112 112" aria-hidden="true"><rect class="map-edge" x="-52" y="-52" width="104" height="104" rx="3"/>${(shapes[key] || []).map(([x, z, w, d]) => `<rect x="${x}" y="${z}" width="${w}" height="${d}"/>`).join('')}<path d="M0 48v-15m-3 4 3-4 3 4"/></svg>`;
+}
+function mapHTML(sel, canPick) {
+  if (LEVELS.length < 2) return '';
+  return `<div class="mapsel" id="mapsel" role="group" aria-label="Harita seçimi"><span>HARİTA SEÇ · ${LEVELS.length} farklı alan</span><div class="mapgrid">${LEVELS.map(m => `<button type="button" class="mapbtn map-${m.style}${m.key === sel ? ' on' : ''}" data-map="${m.key}" aria-pressed="${m.key === sel}" ${canPick ? '' : 'disabled'}>${mapSketch(m.key)}<strong>${m.name}</strong><i>${m.blurb}</i><small>${m.key === sel ? 'SEÇİLİ' : 'SEÇ'}</small></button>`).join('')}</div></div>`;
+}
 function wireMap(onPick) { const box = hud.el.panel.querySelector('#mapsel'); if (!box) return; box.addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('.mapbtn'); if (b && !b.disabled) onPick(b.dataset.map); }); }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 function mainHTML() {
-  return `<h1>涂鸦街区</h1><h2>一款涂鸦风生存射击游戏</h2>
-    <div class="mainbtns"><button type="button" class="start" id="soloBtn">开始游戏<i>单人 · 抵御一波波敌人</i></button><button type="button" id="onlineBtn">在线对战<i>自由混战 · 最多 10 名玩家</i></button></div>
-    ${mapHTML(mapKey, true)}${CONTROLS_HTML}${settingsHTML()}${checkpointHTML()}${best ? `<div class="beststat">最高分：${best}</div>` : ''}`;
+  return `<h1>Doodle District</h1><h2>REMIX · Mürekkep, hareket ve hayatta kalma</h2>
+    <section class="credits" aria-label="Orijinal oyun ve yapımcı">
+      <p>Orijinal oyun: <strong>DoodleShooter · iifor</strong><br>Bu oyun, orijinalin topluluk tarafından düzenlenmiş Remix sürümüdür. Orijinal yapımcıya teşekkürler!</p>
+      <nav aria-label="Orijinal oyunun bağlantıları"><a href="https://doodleshooter.vercel.app/" target="_blank" rel="noopener noreferrer">Orijinal oyunu oyna ↗</a><a href="https://github.com/iifor/doodleshooter" target="_blank" rel="noopener noreferrer">iifor / GitHub kaynak kodu ↗</a></nav>
+    </section>
+    <div class="mainbtns"><button type="button" class="start" id="soloBtn">OYNA<i>Solo · Dalgalara karşı hayatta kal</i></button><button type="button" id="onlineBtn">ÇEVRİMİÇİ<i>Herkes tek · En fazla 10 oyuncu</i></button></div>
+    ${mapHTML(mapKey, true)}${CONTROLS_HTML}${settingsHTML()}${checkpointHTML()}${best ? `<div class="beststat">En iyi skor：${best}</div>` : ''}`;
 }
 function onlineHTML() {
-  return `<h1>在线对战</h1><h2>自由混战 · 先到 ${FFA_TARGET} 杀 · 最多 10 名玩家</h2>
+  return `<h1>ÇEVRİMİÇİ</h1><h2>Herkes tek · Hedef: ${FFA_TARGET} öldürme · En fazla 10 oyuncu</h2>
     <div class="online" id="online">
-      <div class="row"><span>你的昵称</span><input type="text" class="namebox" id="setName" maxlength="14" value="${esc(myName)}"></div>
-      <div class="row"><button type="button" class="big" id="quickBtn">快速匹配</button><span class="hint">自动加入开放的公开大厅；没有的话就为你开一个</span></div>
-      <div class="row split"><span>或</span></div>
-      <div class="row"><button type="button" id="createBtn">创建大厅</button><div class="radio"><label><input type="radio" name="vis" value="public" ${lobby.isPublic ? 'checked' : ''}> 公开</label><label><input type="radio" name="vis" value="private" ${lobby.isPublic ? '' : 'checked'}> 私密 · 仅好友</label></div></div>
-      <div class="row"><span>有大厅代码？</span><input type="text" id="codeBox" placeholder="代码" maxlength="5" autocomplete="off"><button type="button" id="joinBtn">加入</button></div>
-      <div class="lobbylist" id="lobbylist"><div class="row"><span>公开大厅</span><button type="button" class="alt" id="refreshBtn">刷新</button></div><div class="rows" id="lobbyRows">${lobbyListHTML()}</div></div>
+      <div class="row"><span>Oyuncu adın</span><input type="text" class="namebox" id="setName" maxlength="14" value="${esc(myName)}"></div>
+      <div class="row"><button type="button" class="big" id="quickBtn">Hızlı eşleşme</button><span class="hint">Açık bir odaya katıl; oda yoksa yenisini oluştur.</span></div>
+      <div class="row split"><span>veya</span></div>
+      <div class="row"><button type="button" id="createBtn">Oda oluştur</button><div class="radio"><label><input type="radio" name="vis" value="public" ${lobby.isPublic ? 'checked' : ''}> Açık</label><label><input type="radio" name="vis" value="private" ${lobby.isPublic ? '' : 'checked'}> Özel · Arkadaşlar</label></div></div>
+      <div class="row"><span>Oda kodu</span><input type="text" id="codeBox" placeholder="KOD" maxlength="5" autocomplete="off"><button type="button" id="joinBtn">Katıl</button></div>
+      <div class="lobbylist" id="lobbylist"><div class="row"><span>Açık odalar</span><button type="button" class="alt" id="refreshBtn">Yenile</button></div><div class="rows" id="lobbyRows">${lobbyListHTML()}</div></div>
       <div class="status" id="status">${esc(lobby.status || '')}</div>
-      ${lobby.rejoinCode ? `<div class="row"><button type="button" class="big" id="rejoinBtn">重新加入 ${esc(lobby.rejoinCode)}</button></div>` : ''}
-      <div class="row"><button type="button" class="alt" id="backBtn">返回</button></div>
+      ${lobby.rejoinCode ? `<div class="row"><button type="button" class="big" id="rejoinBtn">Tekrar katıl ${esc(lobby.rejoinCode)}</button></div>` : ''}
+      <div class="row"><button type="button" class="alt" id="backBtn">Geri</button></div>
     </div>`;
 }
 function lobbyHTML() {
   const rows = lobbyRows(); const host = net.isHost; const n = rows.length;
-  return `<h1>大厅</h1><h2>自由混战 · 先到 ${FFA_TARGET} 杀 · ${n}/${net.maxPlayers} 名玩家</h2>
+  return `<h1>Oda</h1><h2>Herkes tek · Hedef: ${FFA_TARGET} öldürme · ${n}/${net.maxPlayers} oyuncu</h2>
     <div class="online" id="online">
-      <div class="row"><span>代码</span><span class="code">${String(net.isHost ? (net.aliasCode || net.code) : (lobby.shown || net.code) || '').replace(/-\d+$/, '')}</span></div>
+      <div class="row"><span>Kod</span><span class="code">${String(net.isHost ? (net.aliasCode || net.code) : (lobby.shown || net.code) || '').replace(/-\d+$/, '')}</span></div>
       ${mapHTML(lobby.map || mapKey, host)}
-      <div class="hint">${lobby.isPublic ? '该大厅为公开：任何人都可通过快速匹配或输入代码加入' : '私密大厅：好友在「在线对战 → 加入」中输入此代码'}</div>
-      <div class="plist">${rows.map((p) => `<div class="${p.id === lobby.hostId ? 'host' : ''}${p.id === net.id ? ' me' : ''}"><span>${esc(p.name)}</span><span>${p.id === net.id ? '你' : ''}</span></div>`).join('')}</div>
-      <div class="row"><button type="button" class="big" id="startBtn">开始对战</button><button type="button" class="alt" id="leaveBtn">离开</button></div>
-      <div class="status" id="status">${esc(lobby.status || '')}</div><div class="hint">任何人都可以开始 · ${n < 2 ? '开局后仍可中途加入' : n + ' 名玩家已就位'}</div>
+      <div class="hint">${lobby.isPublic ? 'Herkes hızlı eşleşme veya oda koduyla katılabilir.' : 'Arkadaşın ÇEVRİMİÇİ ekranında bu kodu yazıp Katıl düğmesine bassın.'}</div>
+      <div class="plist">${rows.map((p) => `<div class="${p.id === lobby.hostId ? 'host' : ''}${p.id === net.id ? ' me' : ''}"><span>${esc(p.name)}</span><span>${p.id === net.id ? 'sen' : ''}</span></div>`).join('')}</div>
+      <div class="row"><button type="button" class="big" id="startBtn">Maçı başlat</button><button type="button" class="alt" id="leaveBtn">Ayrıl</button></div>
+      <div class="status" id="status">${esc(lobby.status || '')}</div><div class="hint">Her oyuncu maçı başlatabilir · ${n < 2 ? 'Maç başladıktan sonra da katılabilirsiniz' : n + ' oyuncu hazır'}</div>
     </div>`;
 }
 let lobbyList = null, listBusy = false;
 function lobbyListHTML() {
-  if (listBusy) return '<div class="hint">正在查找…</div>';
-  if (!lobbyList) return '<div class="hint">点击「刷新」查找开放的大厅</div>';
-  if (!lobbyList.length) return '<div class="hint">点击「快速匹配」即可加入大厅</div>';
-  return lobbyList.map((l) => `<div class="lobbyrow"><span class="code">${esc(l.code)}</span><span>${esc(l.hostName || '某人')} 的大厅</span><span>${l.players}/${l.max}${l.inMatch ? ' · 对战中' : ''}</span>${l.full ? '<span class="status">已满</span>' : `<button type="button" data-join="${esc(l.code)}">加入</button>`}</div>`).join('');
+  if (listBusy) return '<div class="hint">Odalar aranıyor…</div>';
+  if (!lobbyList) return '<div class="hint">Açık odaları bulmak için Yenile düğmesine bas.</div>';
+  if (!lobbyList.length) return '<div class="hint">Odaya girmek için Hızlı eşleşme düğmesine bas.</div>';
+  return lobbyList.map((l) => `<div class="lobbyrow"><span class="code">${esc(l.code)}</span><span>${esc(l.hostName || 'Oyuncu')} odası</span><span>${l.players}/${l.max}${l.inMatch ? ' · Maç sürüyor' : ''}</span>${l.full ? '<span class="status">Dolu</span>' : `<button type="button" data-join="${esc(l.code)}">Katıl</button>`}</div>`).join('');
 }
 async function refreshLobbies() {
   if (listBusy || net.active) return; listBusy = true; const box = hud.el.panel.querySelector('#lobbyRows'); if (box) box.innerHTML = lobbyListHTML();
   let err = null; try { lobbyList = await net.listLobbies({ name: myName }); } catch (e) { lobbyList = []; err = e; }
-  listBusy = false; const rows = hud.el.panel.querySelector('#lobbyRows'); if (rows) rows.innerHTML = err ? `<div class="hint">查找失败：${esc(friendlyError(err))}</div>` : lobbyListHTML();
+  listBusy = false; const rows = hud.el.panel.querySelector('#lobbyRows'); if (rows) rows.innerHTML = err ? `<div class="hint">Odalar bulunamadı: ${esc(friendlyError(err))}</div>` : lobbyListHTML();
 }
 function wireOnline() {
   const box = hud.el.panel.querySelector('#online'); if (!box) return;
@@ -674,13 +742,13 @@ function wireOnline() {
   const q = (id) => box.querySelector('#' + id); wireName(box);
   if (q('quickBtn')) q('quickBtn').addEventListener('click', () => { lockButtons(box); quickPlay(); });
   if (q('createBtn')) q('createBtn').addEventListener('click', () => { lockButtons(box); createLobby(box.querySelector('input[name=vis]:checked').value === 'public'); });
-  if (q('joinBtn')) { q('joinBtn').addEventListener('click', () => { const c = q('codeBox').value.trim().toUpperCase(); if (!c) { setStatus('请输入好友给你的大厅代码'); return; } lockButtons(box); joinLobby(c); }); q('codeBox').addEventListener('keydown', (e) => { if (e.key === 'Enter') q('joinBtn').click(); }); }
+  if (q('joinBtn')) { q('joinBtn').addEventListener('click', () => { const c = q('codeBox').value.trim().toUpperCase(); if (!c) { setStatus('Arkadaşının verdiği oda kodunu yaz.'); return; } lockButtons(box); joinLobby(c); }); q('codeBox').addEventListener('keydown', (e) => { if (e.key === 'Enter') q('joinBtn').click(); }); }
   if (q('rejoinBtn')) q('rejoinBtn').addEventListener('click', () => { const c = lobby.rejoinCode; lobby.rejoinCode = null; lockButtons(box); joinLobby(c); });
   if (q('backBtn')) q('backBtn').addEventListener('click', () => { lobby.status = ''; lobby.rejoinCode = null; screen = 'main'; showStart(); });
   if (q('refreshBtn')) { q('refreshBtn').addEventListener('click', () => refreshLobbies()); if (!lobbyList && !listBusy) refreshLobbies(); }
   if (q('lobbyRows')) q('lobbyRows').addEventListener('click', (e) => { const b = e.target.closest('button[data-join]'); if (b) { lockButtons(box); joinLobby(b.dataset.join); } });
   wireMap((k) => { if (net.isHost) { lobby.map = k; broadcastLobby(); } });
-  if (q('startBtn')) q('startBtn').addEventListener('click', () => { if (net.isHost) hostStart(); else { net.send('startreq', {}); setStatus('正在请求房主开始…'); } });
+  if (q('startBtn')) q('startBtn').addEventListener('click', () => { if (net.isHost) hostStart(); else { net.send('startreq', {}); setStatus('Oda sahibinden maçı başlatması isteniyor…'); } });
   if (q('leaveBtn')) q('leaveBtn').addEventListener('click', () => { lobby.rejoinCode = null; leaveOnline(''); });
 }
 function lockButtons(box) { for (const b of box.querySelectorAll('button')) if (b.id !== 'backBtn') b.disabled = true; }
@@ -700,19 +768,19 @@ function showStart() {
 }
 function showPause() {
   if (online()) {
-    hud.showScreen(`<h1>菜单</h1><h2>自由混战 · 大厅 ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</h2><div class="scoreboard">${sortedScores().map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} 杀 · ${s.deaths} 死</span></div>`).join('')}</div>${CONTROLS_HTML}${settingsHTML()}<div class="online" id="online"><div class="row"><button type="button" class="alt" id="leaveBtn">离开对战</button></div></div><div class="go">点击任意位置（或按 ${hud.key('confirm')}）继续游戏</div>`);
+    hud.showScreen(`<h1>Menü</h1><h2>Herkes tek · Oda ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</h2><div class="scoreboard">${sortedScores().map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} öldürme · ${s.deaths} ölüm</span></div>`).join('')}</div>${CONTROLS_HTML}${settingsHTML()}<div class="online" id="online"><div class="row"><button type="button" class="alt" id="leaveBtn">Maçtan ayrıl</button></div></div><div class="go">Devam etmek için tıkla veya ${hud.key('confirm')} tuşuna bas</div>`);
     wireSettings(); wireOnline(); return;
   }
-  hud.showScreen(`<h1>已暂停</h1><h2>第 ${game.wave} 波 · 得分 ${game.score}</h2>${CONTROLS_HTML}${settingsHTML()}${menuBtnHTML()}<div class="go">点击任意位置（或按 ${hud.key('confirm')}）继续</div>`);
+  hud.showScreen(`<h1>Duraklatıldı</h1><h2>${mapName(level.key)} · Dalga ${game.wave} · Skor ${game.score}</h2>${CONTROLS_HTML}${settingsHTML()}${menuBtnHTML()}<div class="go">Devam etmek için tıkla veya ${hud.key('confirm')} tuşuna bas</div>`);
   wireSettings(); wireMenuBtn();
 }
-function showClickToPlay() { hud.showScreen(`<h1>对战开始</h1><h2>自由混战 · 先到 ${FFA_TARGET} 杀</h2><div class="go">点击任意位置（或按 ${hud.key('confirm')}）开始作战</div>`); }
+function showClickToPlay() { hud.showScreen(`<h1>Maç hazır</h1><h2>Herkes tek · Hedef: ${FFA_TARGET} öldürme</h2><div class="go">Başlamak için tıkla veya ${hud.key('confirm')} tuşuna bas.</div>`); }
 function showDead() {
   hud.setGameplayVisible(false); const nb = game.score > best; if (nb) { best = game.score; localStorage.setItem('doodle_best', String(best)); }
-  hud.showScreen(`<h1>被抹除</h1><div class="stats">你撑过了 <b>${game.wave}</b> 波 · <b>${game.kills}</b> 次击杀 · 得分 <b>${game.score}</b>${nb ? ' · <b>新纪录</b>' : ` · 最高分 ${best}`}</div>${checkpointHTML()}${menuBtnHTML()}<div class="go">点击（或按 ${hud.key('confirm')}）再画一次</div>`);
+  hud.showScreen(`<h1>Mürekkebin tükendi</h1><div class="stats"><b>${game.wave}</b> dalga · <b>${game.kills}</b> öldürme · Skor <b>${game.score}</b>${nb ? ' · <b>Yeni rekor</b>' : ` · En iyi skor ${best}`}</div>${checkpointHTML()}${menuBtnHTML()}<div class="go">Tekrar oynamak için tıkla veya ${hud.key('confirm')} tuşuna bas</div>`);
   wireCheckpoints((w) => beginAtWave(w)); wireMenuBtn();
 }
-function menuBtnHTML() { return '<div class="online menubtn"><div class="row"><button type="button" class="alt" id="menuBtn">主菜单</button></div></div>'; }
+function menuBtnHTML() { return '<div class="online menubtn"><div class="row"><button type="button" class="alt" id="menuBtn">Ana menü</button></div></div>'; }
 function wireMenuBtn() { const b = hud.el.panel.querySelector('#menuBtn'); if (b) b.addEventListener('click', (e) => { e.stopPropagation(); toMainMenu(); }); }
 function toMainMenu() { game.state = 'start'; game.mode = 'solo'; game.menu = false; setArena(false); resetGame(); audio.reelLoop(false); input.exitLock(); hud.setGameplayVisible(false); screen = 'main'; showStart(); }
 function toLobbyScreen() { net.inMatch = false; for (const r of remote.values()) r.lastSeen = performance.now(); setArena(true); resetGame(); game.state = 'lobby'; game.over = null; game.menu = false; hud.setGameplayVisible(false); hud.setBoard(null); screen = 'lobby'; showStart(); }
@@ -722,7 +790,7 @@ function resetGame() {
   if (level.breakables.some((b) => !b.alive)) setLevel(loadedKey, arenaLoaded, true);
   enemies.clear(); effects.clear(); for (const p of pickups) R.scene.remove(p.mesh); pickups.length = 0; pickupClock = 0;
   player.maxHp = online() ? 110 : 120; player.regenDelay = online() ? 4 : 4.5; player.regenRate = online() ? 14 : 11;
-  player.reset(level.playerStart); player.name = myName; player.lastHitBy = null; player.lastHit = null; enemies.mods.speed = 1; enemies.mods.damage = 1; hud.setModifier(''); hud.setBoss(null, null); game.boss = null; endFocus(); game.katanaStreak = 0;
+  player.reset(level.playerStart); player.name = myName; player.lastHitBy = null; player.lastHit = null; enemies.mods.speed = 1; enemies.mods.damage = 1; enemies.mods.incomingDamage = 1.2; hud.setModifier(''); hud.setBoss(null, null); game.boss = null; endFocus(); game.katanaStreak = 0;
   game.score = 0; game.kills = 0; game.combo = 0; game.wave = 0; game.intermission = 0; game.queue = []; game.time = 0; game.over = null; game.matchT = 0; hud.setScore(0, 0); hud.setTimer(''); hud.setPvpScore(null); hud.setWave(1, 0); hud.setBoard(null);
 }
 function beginCommon() { audio.init(); audio.resume(); if (!input.usingGamepad) input.requestLock(); if (musicWanted && !audio.musicPlaying) audio.musicOn(true); hud.hideScreen(); hud.setGameplayVisible(true); game.menu = false; }
@@ -742,8 +810,9 @@ function startMatch(late, spawnIdx) {
   for (const r of remote.values()) r.lastSeen = performance.now();
   if (!scores.size) for (const [id, p] of lobby.players) scores.set(id, { name: p.name, kills: 0, deaths: 0 });
   const spots = spawnSpots(); player.reset(spawnIdx != null && spots[spawnIdx] ? spots[spawnIdx].clone() : arenaSpawn()); beginCommon(); game.state = 'play'; screen = 'lobby'; player.shieldT = 2;
-  refreshScoreHud(); hud.message('自由混战', late ? '你加入了一场进行中的对战' : '先到 ' + FFA_TARGET + ' 杀 · ' + Math.round(FFA_TIME / 60) + ' 分钟 · 人人都是目标', 3);
-  hud.tip(`按住 <b>${hud.key('score')}</b> 查看计分板`, 5);
+  if (late) net.broadcast('mine-sync', { map: level.key });
+  refreshScoreHud(); hud.message('Herkes tek', late ? 'Devam eden maça katıldın' : 'Hedef: ' + FFA_TARGET + ' öldürme · ' + Math.round(FFA_TIME / 60) + ' dakika · Herkes rakip', 3);
+  hud.tip(`Skor tablosu: <b>${hud.key('score')}</b> basılı tut.`, 5);
   // a match started by someone else's click cannot grab the mouse: ask for a click
   setTimeout(() => { if (game.state === 'play' && !input.pointerLocked && !input.usingGamepad) { game.menu = true; showClickToPlay(); } }, 250);
 }
@@ -776,20 +845,23 @@ function step(now) {
   // never more than 50 ms a step: a bigger jump (a tab coming back) makes the springs in the view model fly apart
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   input.update(dt);
-  const st = game.state; const playing = st === 'play' || st === 'dying';
+  let st = game.state;
   if (st === 'start' || st === 'pause' || st === 'dead' || st === 'over') { if (input.pressed('jump') || input.pressed('confirm') || (st === 'pause' && input.pressed('pause'))) hud.onScreenClick(); }
   else if ((st === 'play' || (st === 'dying' && online())) && input.pressed('pause')) { if (game.menu) resume(); else { pause(); input.exitLock(); } }
   else if ((st === 'play' || st === 'dying') && game.menu && (input.pressed('jump') || input.pressed('confirm'))) resume();
-  if (input.pressed('music')) { musicWanted = !musicWanted; localStorage.setItem('doodle_music', musicWanted ? '1' : '0'); audio.musicOn(musicWanted); hud.tip(musicWanted ? '音乐已开启' : '音乐已关闭', 1.5); }
+  st = game.state; const playing = st === 'play' || st === 'dying';
+  if (input.pressed('music')) { musicWanted = !musicWanted; localStorage.setItem('doodle_music', musicWanted ? '1' : '0'); audio.musicOn(musicWanted); hud.tip(musicWanted ? 'Müzik açık' : 'Müzik kapalı', 1.5); }
   if (online() && playing) {
     if (input.usingGamepad && input.pressed('score')) boardToggle = !boardToggle;
     const want = ((input.down('score') && !input.usingGamepad) || boardToggle) && !game.menu; if (want !== !hud.el.board.hidden) hud.setBoard(want ? boardHTML() : null);
   } else boardToggle = false;
-  if (st === 'play' && !game.menu && !input.pointerLocked && !input.usingGamepad) { lockTipT -= dt; if (lockTipT <= 0) { lockTipT = 2.5; hud.tip('点击画面以锁定鼠标', 2); } }
+  if (st === 'play' && !game.menu && !input.pointerLocked && !input.usingGamepad) { lockTipT -= dt; if (lockTipT <= 0) { lockTipT = 2.5; hud.tip('Oynamak için sahneye tıkla', 2); } }
   let scale = 1;
   if (game.hitstopT > 0) { game.hitstopT -= dt; scale = game.hitstopScale; }
   else if (game.focus.active) scale = FOCUS_SCALE;
   const sdt = dt * scale;
+  // Update anchors before player physics. Online scenes share host time even after late joins or tab throttling.
+  for (const a of level.animated) a.update(net.active ? sceneClock.time() : game.time);
   if (st === 'play' && !online()) updateFocus(dt); else endFocus();
   if (playing) {
     game.time += sdt; if (player.shieldT > 0) player.shieldT -= dt;
@@ -803,11 +875,11 @@ function step(now) {
       game.deathT += dt;
       if (online()) {
         const before = Math.ceil(game.respawnT); game.respawnT -= dt; const left = Math.ceil(game.respawnT);
-        if (left > 0) { if (left !== before || game.deathT <= dt) hud.message(String(left), '即将回到场上', 1.1); }
+        if (left > 0) { if (left !== before || game.deathT <= dt) hud.message(String(left), 'Yeniden doğuyorsun', 1.1); }
         else if (before > 0) { game.respawnArm = input.lastActive; game.promptT = 0; }
         else if (!game.menu) {
           // waiting on a press: any key, button or click brings you back; pause opens the menu instead
-          game.promptT -= dt; if (game.promptT <= 0) { game.promptT = 1.4; hud.message('就绪', `按 ${hud.key('confirm')} · 任意按键或点击即可重生`, 1.5); }
+          game.promptT -= dt; if (game.promptT <= 0) { game.promptT = 1.4; hud.message('Hazır', `Yeniden doğmak için tıkla veya ${hud.key('confirm')} tuşuna bas`, 1.5); }
           if (input.lastActive !== game.respawnArm && !input.pressed('pause') && !input.down('pause')) respawnLocal();
         }
       }
@@ -817,13 +889,13 @@ function step(now) {
     game.time += dt; if (st === 'start' || st === 'dead' || st === 'lobby' || st === 'over') player.idleCam(game.time); effects.update(dt); if (net.active) netUpdate(dt);
     if (st === 'over') { game.overT += dt; if (net.isHost && game.overT > 8) { net.send('backtolobby', {}); toLobbyScreen(); } else if (!net.isHost && game.overT > 15) { toLobbyScreen(); } }
   }
-  for (const a of level.animated) a.update(game.time);
   audio.setListener(player.eye, player.right);
-  const w = player.weapon; if (w.isGun) hud.setAmmo(w.mag, w.reserve, w.magSize, w.reloading); else hud.setKatana();
-  hud.setSlots(player.weapons.map((wp, i) => ({ name: wp.name, active: i === player.weaponIndex, ammo: wp.isGun ? wp.mag + '/' + wp.reserve : '∞', empty: wp.isGun && wp.mag === 0 && wp.reserve === 0 })));
+  const w = player.weapon; if (w.isGun) hud.setAmmo(w.mag, w.reserveText, w.magSize, w.reloading); else hud.setKatana();
+  hud.setSupport(player.ordnance);
+  hud.setSlots(player.weapons.map((wp, i) => ({ name: wp.name, active: i === player.weaponIndex, ammo: wp.isGun ? wp.mag + '/' + wp.reserveText : '∞', empty: wp.isGun && !wp.infiniteReserve && wp.mag === 0 && wp.reserve === 0 })));
   hud.setGrenades(player.grenades); hud.setGrappleStamina(player.grapStam); hud.setHealth(player.hp, player.maxHp); hud.setSpread(w.spreadPx); hud.update(dt);
-  if (online()) hud.setFocusMeter(playing, player.grapStam, false, '抓钩');
-  else hud.setFocusMeter(playing && (w.kind === 'katana' || game.katanaStreak > 0 || game.focus.active), game.focus.active ? 1 : clamp(game.katanaStreak / KATANA_CHARGE_KILLS, 0, 1), game.focus.active, '太刀');
+  if (online()) hud.setFocusMeter(playing, player.grapStam, false, 'Grapple');
+  else hud.setFocusMeter(playing && (w.kind === 'katana' || game.katanaStreak > 0 || game.focus.active), game.focus.active ? 1 : clamp(game.katanaStreak / KATANA_CHARGE_KILLS, 0, 1), game.focus.active, 'Katana');
   if (game.boss) { if (game.boss.alive) hud.setBoss(game.boss.T.name, game.boss.hp / game.boss.maxHp); else { hud.setBoss(null, null); game.boss = null; } }
   audio.setIntensity(clamp((enemies.alive + game.queue.length + remote.size * 2) / 12, 0, 1) * (game.intermission > 0 ? 0.25 : 1));
   R.render(game.time, { hurt: player.hurtFx, flash: player.flashFx, slow: scale < 1 ? 1 : 0, lowHp: player.alive && player.hp < 30 ? 1 - player.hp / 30 : 0 });

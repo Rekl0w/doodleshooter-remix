@@ -4,11 +4,12 @@
 // whether it is shooting at a bot or a friend.
 import * as THREE from 'three';
 import { makeInkMaterial, setFill, INK } from './render.js';
-import { buildHumanoid, buildWeaponProp } from './enemies.js';
+import { buildHumanoid, buildWeaponProp, aimWeaponProp } from './enemies.js';
+import { WEAPON_ORDER } from './combat.js';
 import { clamp, damp, angleLerp, wrapAngle } from './util.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
-const WEAPON_KINDS = ['rifle', 'shotgun', 'sniper', 'blade'];
+const WEAPON_KINDS = WEAPON_ORDER.map(kind => kind === 'katana' ? 'blade' : kind);
 const HIT = [['head', 0.3], ['torso', 0.33], ['hips', 0.2], ['armL', 0.11], ['armR', 0.11], ['foreL', 0.1], ['foreR', 0.1], ['legL', 0.13], ['legR', 0.13], ['shinL', 0.11], ['shinR', 0.11]];
 
 // what a player broadcasts about itself, ~20 times a second:
@@ -41,6 +42,7 @@ export class RemotePlayer {
   _buildModel() {
     const model = buildHumanoid(this.mat, this.solid, this.T);
     this.root = model.root; this.parts = model.parts; this.J = model.J; this.face = model.face;
+    this.leftGun = null;
     this.root.visible = false; this.ctx.scene.add(this.root); this.weaponIndex = -1;
     // a name tag: a little flag above the head so you know who is who
     this.tagG = new THREE.Group(); this.root.add(this.tagG); this.tagG.position.y = 2.25;
@@ -68,8 +70,12 @@ export class RemotePlayer {
   get blockRadius() { return 0; }
   setWeapon(i) {
     if (i === this.weaponIndex && this.J.gun.children.length) return; this.weaponIndex = i;
-    const gun = this.J.gun; while (gun.children.length) gun.remove(gun.children[0]);
+    const gun = this.J.gun; while (gun.children.length) { const child = gun.children[0]; child.traverse(o => o.geometry?.dispose()); gun.remove(child); }
     buildWeaponProp(gun, this.mat, this.solid, { weapon: WEAPON_KINDS[i] || 'rifle' });
+    if (!this.leftGun) { this.leftGun = new THREE.Group(); this.leftGun.position.set(0, -.29, .07); this.J.foreL.add(this.leftGun); }
+    while (this.leftGun.children.length) { const child = this.leftGun.children[0]; child.traverse(o => o.geometry?.dispose()); this.leftGun.remove(child); }
+    this.leftGun.visible = WEAPON_KINDS[i] === 'dual';
+    if (this.leftGun.visible) buildWeaponProp(this.leftGun, this.mat, this.solid, { weapon: 'dual' });
   }
   push(snap, t) {
     if (!snap) return;
@@ -139,7 +145,7 @@ export class RemotePlayer {
     if (!b.onGround) { J.legL.rotation.x = -0.5; J.legR.rotation.x = 0.6; J.shinL.rotation.x = 1.0; J.shinR.rotation.x = 0.5; }
     // guns are carried up and forward, two hands on them, tilting with where they look; the
     // blade hangs at the side until it is raised to guard
-    const blade = this.weaponIndex === WEAPON_KINDS.length - 1; const aim = blade ? 0 : (this.aiming ? 1 : sp > 6.5 ? 0.8 : 0.95);
+    const blade = WEAPON_KINDS[this.weaponIndex] === 'blade'; const aim = blade ? 0 : (this.aiming ? 1 : sp > 6.5 ? 0.8 : 0.95);
     const look = clamp(this.pitch, -1.1, 1.1);
     if (blade) {
       const g = this.blocking ? 1 : 0;
@@ -151,6 +157,8 @@ export class RemotePlayer {
     J.torso.rotation.x = -0.2 * w + (this.sliding ? 0.5 : 0) + (this.crouching ? 0.25 : 0); J.torso.rotation.y = -0.3 * aim;
     J.hips.position.y = (this.crouching ? 0.55 : 0.86) + Math.abs(c) * 0.07 * w;
     J.headG.rotation.x = clamp(-this.pitch, -0.7, 0.7) * 0.7;
+    if (this.leftGun?.visible) { J.armL.rotation.y = 0; J.armL.rotation.z = .12; J.foreL.rotation.x = -.2; J.torso.rotation.y = 0; aimWeaponProp(this.leftGun, this.forward); }
+    if (!blade) aimWeaponProp(J.gun, this.forward);
     this.tagG.rotation.y = -this.root.rotation.y + (this.ctx.player ? Math.atan2(this.ctx.player.eye.x - this.body.pos.x, this.ctx.player.eye.z - this.body.pos.z) : 0);
   }
   dispose() { if (this.root) this.ctx.scene.remove(this.root); this.ctx.scene.remove(this.rope); this.ctx.scene.remove(this.hook); }

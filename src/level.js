@@ -5,14 +5,16 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeInkMaterial, INK } from './render.js';
 import { rand, choose, TAU } from './util.js';
 import { buildHumanoid } from './enemies.js';
+import { NEW_MAPS, MAP_BUILDERS } from './maps.js';
+import { addSkyAnimals } from './sky.js';
 
 // Doodle Mexico is built and kept, but off the menu until it is ready; flip this to offer it again
 export const MEXICO_READY = false;
-export const LEVELS = [{ key: 'district', name: '涂鸦街区', blurb: '街道、屋顶与消防梯' }, ...(MEXICO_READY ? [{ key: 'mexico', name: '涂鸦墨西哥', blurb: '阳光烘烤的广场 · 皮纳塔、塔可和马里亚奇乐队' }] : [])];
+export const LEVELS = [{ key: 'district', name: 'Karalama Mahallesi', blurb: 'Sokaklar · Kule · Yangın merdivenleri', style: 'district' }, ...NEW_MAPS, ...(MEXICO_READY ? [{ key: 'mexico', name: 'Meksika Meydanı', blurb: 'Meydan · Pazar · Çan kulesi', style: 'mexico' }] : [])];
 
 function createBuilder(scene, world) {
   const geos = {}; const L = { rings: [], spawns: [], snipers: [], pickups: [], animated: [], meshes: [], playerStart: new THREE.Vector3(0, 0, 42), bounds: { minX: -55, maxX: 55, minZ: -55, maxZ: 55 }, arenaSpawns: [], grappleMovers: [], breakables: [], key: 'district' };
-  const addGeo = (g, ink) => (geos[ink] || (geos[ink] = [])).push(g);
+  const addGeo = (g, ink) => { if (!g.index) g.setIndex(Array.from({ length: g.attributes.position.count }, (_, i) => i)); (geos[ink] || (geos[ink] = [])).push(g); };
   const collider = (x, y, z, w, h, d, o = {}) => world.addBox({ x: x - w / 2, y, z: z - d / 2 }, { x: x + w / 2, y: y + h, z: z + d / 2 }, { noNav: !!o.noNav, noShoot: !!o.noShoot, noGrapple: !!o.noGrapple, tag: o.tag });
   function box(x, y, z, w, h, d, o = {}) {
     const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y + h / 2, z); addGeo(g, o.ink ?? INK.BLUE);
@@ -77,10 +79,20 @@ function createBuilder(scene, world) {
   const pickup = (x, y, z) => L.pickups.push(new THREE.Vector3(x, y, z));
   // ---------------- shared finish ----------------
   function finish() {
+    addSkyAnimals({ L, scene });
     for (const ink in geos) {
-      const merged = mergeGeometries(geos[ink], false);
-      const mesh = new THREE.Mesh(merged, makeInkMaterial({ ink: Number(ink) }));
-      mesh.matrixAutoUpdate = false; scene.add(mesh); L.meshes.push(mesh);
+      const chunks = new Map();
+      for (const geometry of geos[ink]) {
+        let key = 'all';
+        if (L.chunkSize) { geometry.computeBoundingBox(); const c = geometry.boundingBox.getCenter(new THREE.Vector3()); key = `${Math.floor(c.x / L.chunkSize)},${Math.floor(c.z / L.chunkSize)}`; }
+        if (!chunks.has(key)) chunks.set(key, []); chunks.get(key).push(geometry);
+      }
+      for (const chunk of chunks.values()) {
+        const merged = mergeGeometries(chunk, false);
+        const mesh = new THREE.Mesh(merged, makeInkMaterial({ ink: Number(ink) }));
+        mesh.matrixAutoUpdate = false; scene.add(mesh); L.meshes.push(mesh);
+      }
+      for (const geometry of geos[ink]) geometry.dispose();
     }
     world.finalize();
     return L;
@@ -466,5 +478,6 @@ function buildMexico(B, arena = false) {
 
 export function buildLevel(scene, world, key = 'district', opts = {}) {
   const B = createBuilder(scene, world);
+  if (MAP_BUILDERS[key]) return MAP_BUILDERS[key](B, !!opts.arena);
   return key === 'mexico' ? buildMexico(B, !!opts.arena) : buildDistrict(B, !!opts.arena);
 }

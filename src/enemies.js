@@ -1,5 +1,6 @@
 // Enemies: doodle humanoids (asdf-style stick figures with faces), flyers, bombers, shield bearers and a boss.
 import * as THREE from 'three';
+import { inMeleeArc, blastDamage } from './combat.js';
 import { makeInkMaterial, setFill, INK } from './render.js';
 import { makeBody, SEE_THROUGH } from './physics.js';
 import { rand, randInt, clamp, damp, wrapAngle, angleLerp, choose, alignYAxis, TAU } from './util.js';
@@ -12,16 +13,16 @@ const nxOf = (dx, d) => dx / (d || 1), nzOf = (dz, d) => dz / (d || 1);
 export const BOSSES = ['boss', 'eraser', 'inkblot'];
 export const STATE_CODES = { spawn: 0, hunt: 1, stunned: 2, dead: 3 }; export const STATE_NAMES = ['spawn', 'hunt', 'stunned', 'dead'];
 export const TYPES = {
-  grunt: { hp: 100, speed: 5.2, weapon: 'rifle', range: 28, stop: 16, keep: 7, burst: 3, burstInt: 0.15, cool: [1.6, 2.6], dmg: 6, spread: 0.055, pspeed: 36, score: 100, scale: 1.0, name: '小兵', hat: 'cap', build: { bodyW: 1, headS: 1, limbR: 0.032 } },
-  rusher: { hp: 70, speed: 7.6, weapon: 'blade', lunge: 2.9, reach: 3.0, standoff: 1.9, cool: [1.0, 1.5], dmg: 15, score: 120, scale: 0.95, name: '冲锋怪', hat: 'band', build: { bodyW: 0.82, headS: 0.95, limbR: 0.027 } },
-  heavy: { hp: 320, speed: 3.0, weapon: 'shotgun', range: 18, stop: 9, keep: 5, pellets: 7, cool: [2.4, 3.2], dmg: 5, spread: 0.13, pspeed: 32, score: 260, scale: 1.25, name: '重装怪', hat: 'helmet', build: { bodyW: 1.55, headS: 0.88, limbR: 0.05 } },
-  sniper: { hp: 60, speed: 3.6, weapon: 'sniper', range: 90, stop: 90, keep: 15, aimTime: 1.7, cool: [2.8, 3.8], dmg: 22, spread: 0.006, pspeed: 95, score: 180, scale: 1.05, name: '狙击怪', stationary: true, hat: 'hood', build: { bodyW: 0.78, headS: 0.92, limbR: 0.026 } },
-  shield: { hp: 150, speed: 3.8, weapon: 'pistol', range: 20, stop: 8, keep: 4, burst: 2, burstInt: 0.2, cool: [1.8, 2.6], dmg: 5, spread: 0.06, pspeed: 34, score: 200, scale: 1.05, name: '盾牌怪', hat: 'helmet', shield: true, build: { bodyW: 1.2, headS: 0.9, limbR: 0.042 } },
-  bomber: { hp: 26, speed: 6.5, weapon: 'bomb', fuseRange: 3.4, fuse: 1.05, blast: 4.2, dmg: 24, score: 150, scale: 0.9, name: '墨水炸弹', ink: INK.BLACK, model: 'bomber' },
-  flyer: { hp: 40, speed: 6.2, weapon: 'dive', dmg: 10, cool: [2.8, 4.2], score: 140, scale: 1.5, name: '纸黄蜂', flying: true, model: 'flyer' },
-  boss: { hp: 2600, speed: 3.2, weapon: 'boss', bossKind: 'doodler', range: 32, stop: 6, keep: 0, cool: [2.6, 3.6], dmg: 22, score: 2500, scale: 2.7, name: '涂鸦魔王', boss: true, ink: INK.BLACK, hat: 'crown', build: { bodyW: 1.35, headS: 1.15, limbR: 0.06 } },
-  eraser: { hp: 3400, speed: 4.2, weapon: 'boss', bossKind: 'eraser', range: 30, stop: 8, keep: 0, cool: [2.2, 3.2], dmg: 26, score: 3200, scale: 2.6, name: '橡皮擦魔王', boss: true, ink: INK.PINK, model: 'blob', build: {} },
-  inkblot: { hp: 3000, speed: 3.0, weapon: 'boss', bossKind: 'inkblot', range: 34, stop: 10, keep: 0, cool: [2.4, 3.4], dmg: 20, score: 3600, scale: 2.4, name: '墨渍魔王', boss: true, ink: INK.BLACK, model: 'blob', build: {} },
+  grunt: { hp: 100, speed: 5.2, weapon: 'rifle', range: 28, stop: 16, keep: 7, burst: 3, burstInt: 0.15, cool: [1.6, 2.6], dmg: 6, spread: 0.055, pspeed: 36, score: 100, scale: 1.0, name: 'Piyade', hat: 'cap', build: { bodyW: 1, headS: 1, limbR: 0.032 } },
+  rusher: { hp: 70, speed: 7.6, weapon: 'blade', lunge: 2.9, reach: 3.0, standoff: 1.9, cool: [1.0, 1.5], dmg: 15, score: 120, scale: 0.95, name: 'Akıncı', hat: 'band', build: { bodyW: 0.82, headS: 0.95, limbR: 0.027 } },
+  heavy: { hp: 320, speed: 3.0, weapon: 'shotgun', range: 18, stop: 9, keep: 5, pellets: 7, cool: [2.4, 3.2], dmg: 5, spread: 0.13, pspeed: 32, score: 260, scale: 1.25, name: 'Ağır asker', hat: 'helmet', build: { bodyW: 1.55, headS: 0.88, limbR: 0.05 } },
+  sniper: { hp: 60, speed: 3.6, weapon: 'sniper', range: 90, stop: 90, keep: 15, aimTime: 1.7, cool: [2.8, 3.8], dmg: 22, spread: 0.006, pspeed: 95, score: 180, scale: 1.05, name: 'Nişancı', stationary: true, hat: 'hood', build: { bodyW: 0.78, headS: 0.92, limbR: 0.026 } },
+  shield: { hp: 150, speed: 3.8, weapon: 'pistol', range: 20, stop: 8, keep: 4, burst: 2, burstInt: 0.2, cool: [1.8, 2.6], dmg: 5, spread: 0.06, pspeed: 34, score: 200, scale: 1.05, name: 'Kalkanlı', hat: 'helmet', shield: true, build: { bodyW: 1.2, headS: 0.9, limbR: 0.042 } },
+  bomber: { hp: 26, speed: 6.5, weapon: 'bomb', fuseRange: 3.4, fuse: 1.05, blast: 4.2, dmg: 24, score: 150, scale: 0.9, name: 'Canlı bomba', ink: INK.BLACK, model: 'bomber' },
+  flyer: { hp: 40, speed: 6.2, weapon: 'dive', dmg: 10, cool: [2.8, 4.2], score: 140, scale: 1.5, name: 'Kâğıt arısı', flying: true, model: 'flyer' },
+  boss: { hp: 2600, speed: 3.2, weapon: 'boss', bossKind: 'doodler', range: 32, stop: 6, keep: 0, cool: [2.6, 3.6], dmg: 22, score: 2500, scale: 2.7, name: 'Karalayıcı', boss: true, ink: INK.BLACK, hat: 'crown', build: { bodyW: 1.35, headS: 1.15, limbR: 0.06 } },
+  eraser: { hp: 3400, speed: 4.2, weapon: 'boss', bossKind: 'eraser', range: 30, stop: 8, keep: 0, cool: [2.2, 3.2], dmg: 26, score: 3200, scale: 2.6, name: 'Silgi', boss: true, ink: INK.PINK, model: 'blob', build: {} },
+  inkblot: { hp: 3000, speed: 3.0, weapon: 'boss', bossKind: 'inkblot', range: 34, stop: 10, keep: 0, cool: [2.4, 3.4], dmg: 20, score: 3600, scale: 2.4, name: 'Mürekkep Lekesi', boss: true, ink: INK.BLACK, model: 'blob', build: {} },
 };
 
 // ---------------- doodle model kit ----------------
@@ -67,12 +68,33 @@ function buildHat(headG, mat, solid, T) {
   else if (h === 'crown') { for (let i = 0; i < 6; i++) { const a = (i / 6) * TAU; const sp = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.26, 4), mat); sp.position.set(Math.cos(a) * 0.22, 0.34, Math.sin(a) * 0.22); headG.add(sp); } const b = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.035, 4, 14), mat); b.rotation.x = Math.PI / 2; b.position.y = 0.24; headG.add(b); }
 }
 export function buildWeaponProp(gun, mat, solid, T) {
+  gun.rotation.set(0, 0, 0);
   if (T.weapon === 'blade') { bx(0.02, 0.05, 0.95, 0, 0.04, 0.42, mat, gun); bx(0.11, 0.11, 0.03, 0, 0.04, -0.06, solid, gun); bx(0.035, 0.045, 0.24, 0, 0.04, -0.19, solid, gun); }
   else if (T.weapon === 'shotgun') { bx(0.1, 0.13, 0.66, 0, 0.02, 0.2, mat, gun); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.5, 6), solid); b.rotation.x = Math.PI / 2; b.position.set(0, 0.08, 0.5); gun.add(b); }
   else if (T.weapon === 'sniper') { bx(0.075, 0.11, 0.6, 0, 0.02, 0.15, mat, gun); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.95, 6), solid); b.rotation.x = Math.PI / 2; b.position.set(0, 0.05, 0.72); gun.add(b); bx(0.06, 0.07, 0.22, 0, 0.13, 0.06, solid, gun); }
-  else if (T.weapon === 'pistol') { bx(0.055, 0.09, 0.3, 0, 0.03, 0.13, mat, gun); bx(0.045, 0.11, 0.055, 0, -0.05, 0, solid, gun); }
+  else if (T.weapon === 'pistol' || T.weapon === 'revolver' || T.weapon === 'dual') { bx(0.055, 0.09, 0.3, 0, 0.03, 0.13, mat, gun); bx(0.045, 0.11, 0.055, 0, -0.05, 0, solid, gun); }
+  else if (T.weapon === 'smg') { bx(0.09, 0.12, 0.32, 0, 0.02, 0.14, mat, gun); bx(0.05, 0.22, 0.07, 0, -0.13, 0.13, solid, gun); bx(0.04, 0.04, 0.2, 0, 0.04, 0.38, solid, gun); }
+  else if (['ak47', 'm4a1', 'famas', 'm249', 'dmr'].includes(T.weapon)) {
+    const k = T.weapon, short = k === 'famas', heavy = k === 'm249';
+    bx(heavy ? .15 : .09, .13, short ? .35 : .6, 0, .02, .2, mat, gun);
+    bx(.045, .045, k === 'dmr' ? .8 : short ? .2 : .42, 0, .05, short ? .42 : .65, solid, gun);
+    bx(heavy ? .2 : .06, heavy ? .2 : .25, .13, 0, -.13, k === 'famas' ? -.1 : .15, solid, gun);
+    bx(.07, .1, .3, 0, .015, -.22, mat, gun);
+    if (k === 'ak47') bx(.07, .08, .12, 0, -.3, .08, solid, gun).rotation.x = -.3;
+    if (k === 'famas') bx(.07, .04, .35, 0, .16, .1, solid, gun);
+  }
   else if (T.weapon === 'boss') { const pen = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 2.4, 7), makeInkMaterial({ ink: INK.ORANGE, shadeScale: 0, shadeBias: 1 })); pen.position.y = 0.7; gun.add(pen); const tip = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.38, 6), solid); tip.position.y = 2.08; gun.add(tip); const er = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.26, 8), makeInkMaterial({ ink: INK.PINK, shadeScale: 0, shadeBias: 1 })); er.position.y = -0.62; gun.add(er); }
   else { bx(0.085, 0.12, 0.5, 0, 0.02, 0.16, mat, gun); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.34, 6), solid); b.rotation.x = Math.PI / 2; b.position.set(0, 0.05, 0.52); gun.add(b); bx(0.05, 0.16, 0.09, 0, -0.09, 0.08, mat, gun); }
+}
+
+const _weaponParentQ = new THREE.Quaternion(), _weaponAimQ = new THREE.Quaternion();
+const _weaponAxis = new THREE.Vector3(0, 0, 1);
+export function aimWeaponProp(gun, direction) {
+  if (direction.lengthSq() < 0.0001 || !gun.parent) return;
+  gun.parent.updateWorldMatrix(true, false);
+  gun.parent.getWorldQuaternion(_weaponParentQ);
+  _weaponAimQ.setFromUnitVectors(_weaponAxis, direction);
+  gun.quaternion.copy(_weaponParentQ.invert()).multiply(_weaponAimQ);
 }
 
 export function buildHumanoid(mat, solid, T) {
@@ -232,7 +254,7 @@ class Projectiles {
 
 export class EnemyManager {
   constructor(ctx) {
-    this.ctx = ctx; this.enemies = []; this.alive = 0; this.projectiles = new Projectiles(this); this.onKill = null; this.onBoss = null; this._sepT = 0; this._slot = 0; this.mods = { speed: 1, damage: 1 };
+    this.ctx = ctx; this.enemies = []; this.alive = 0; this.projectiles = new Projectiles(this); this.onKill = null; this.onBoss = null; this._sepT = 0; this._slot = 0; this.mods = { speed: 1, damage: 1, incomingDamage: 1.2 };
     // mirror mode: this peer is a client; the host owns AI, physics and health, we only render
     this.mirror = false; this.nextId = 1; this.onClientHit = null; this.onSpawn = null; this.byId = new Map();
   }
@@ -277,9 +299,11 @@ export class EnemyManager {
       if (!e.alive || e === ignore) continue;
       for (let i = 0; i < e.hit.length; i++) {
         const c = e.hitSpheres[i], r = e.hit[i][1] * e.T.scale;
-        _v.subVectors(c, o); const tca = _v.dot(d); if (tca < 0 || tca > maxDist) continue;
+        _v.subVectors(c, o); const tca = _v.dot(d);
         const d2 = _v.lengthSq() - tca * tca; if (d2 > r * r) continue;
-        const t = tca - Math.sqrt(r * r - d2); if (t < 0) continue;
+        const half = Math.sqrt(Math.max(0, r * r - d2));
+        if (tca + half < 0) continue;
+        const t = Math.max(0, tca - half); if (t > maxDist) continue;
         if (!best || t < best.dist) best = { enemy: e, part: e.hit[i][0], dist: t, point: new THREE.Vector3(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t) };
       }
     }
@@ -287,11 +311,13 @@ export class EnemyManager {
   }
   inArc(pos, dir, range, cosHalf) {
     const out = [];
-    for (const e of this.enemies) { if (!e.alive) continue; _v.subVectors(e.center, pos); const d = _v.length() - (e.T.boss ? 1.2 : 0); if (d > range + 0.3) continue; if (d > 0.3 && _v.normalize().dot(dir) < cosHalf) continue; out.push({ enemy: e, dist: d }); }
+    for (const e of this.enemies) { if (!e.alive) continue; const radius = e.T.boss ? 1.2 : 0.35; if (!inMeleeArc(pos, dir, e.center, radius, range, cosHalf)) continue; if (!this.ctx.world.hasLineOfSight(pos, e.center)) continue; out.push({ enemy: e, dist: Math.max(0, e.center.distanceTo(pos) - radius) }); }
     return out.sort((a, b) => a.dist - b.dist);
   }
-  blastEnemies(point, radius, dmg, except) {
-    for (const e of this.enemies) { if (!e.alive || e === except) continue; const d = e.center.distanceTo(point); if (d > radius) continue; _d.subVectors(e.center, point).normalize(); this.damage(e, dmg * (1 - d / radius * 0.6), { point: e.center.clone(), dir: _d.clone(), part: 'torso', source: 'blast', crit: false }); }
+  blastEnemies(point, radius, dmg, except, innerRadius = 0, edgeDamage = dmg * 0.4) {
+    // Resolve occlusion before damage can destroy cover or spawn secondary effects.
+    const targets = this.enemies.filter(e => e.alive && e !== except && e.center.distanceTo(point) <= radius && this.ctx.world.hasLineOfSight(point, e.center));
+    for (const e of targets) { const d = e.center.distanceTo(point); _d.subVectors(e.center, point).normalize(); this.damage(e, blastDamage(d, radius, dmg, innerRadius, edgeDamage), { point: e.center.clone(), dir: _d.clone(), part: 'torso', source: 'blast', crit: false }); }
   }
   yank(e, target) {
     if (!e.alive) return; if (e.T.boss) { e.flinch = 1; return; }
@@ -313,7 +339,7 @@ export class EnemyManager {
       if (info.source === 'katana' || info.source === 'blast') { e.shieldHp--; if (e.shieldHp <= 0) this._breakShield(e); }
       this.ctx.hud.hitmarker(false, false); return;
     }
-    amount *= this.mods.damage;
+    amount *= this.mods.incomingDamage;
     e.hp -= amount; e.flinch = 1; e.flashT = 0.07; if (!e.flashOn) { setFill(e.mat, true); e.flashOn = true; }
     const dir = info.dir || _d.set(0, 1, 0); const amt = clamp(0.5 + amount / 70, 0.5, 2.2) * (e.T.boss ? 1.6 : 1);
     this.ctx.effects.blood(info.point || e.center, dir, amt, { ink: e.T.ink === INK.BLACK ? INK.BLACK : INK.RED });
@@ -798,5 +824,6 @@ export class EnemyManager {
     _v.subVectors(pc, e.center); const yawTo = Math.atan2(_v.x, _v.z); J.headG.rotation.y = clamp(wrapAngle(yawTo - e.yaw) - (J.torso.rotation.y || 0), -1.1, 1.1);
     J.headG.rotation.x = clamp(-Math.atan2(_v.y, Math.hypot(_v.x, _v.z)), -0.6, 0.6) * 0.8; J.headG.rotation.z = Math.sin(e.phase * 0.5) * 0.06 * w;
     if (e.state === 'stunned') { J.torso.rotation.x = 0.6; J.armL.rotation.x = -2.5; J.armR.rotation.x = -2.5; J.legL.rotation.x = -0.8; J.legR.rotation.x = 0.9; }
+    if (T.weapon !== 'blade' && T.weapon !== 'boss' && e.state !== 'stunned') aimWeaponProp(J.gun, _v.subVectors(pc, e.center).normalize());
   }
 }

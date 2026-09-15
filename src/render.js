@@ -88,6 +88,7 @@ uniform float uHurt;
 uniform float uFlash;
 uniform float uSlow;
 uniform float uLineSpacing;
+uniform float uDesert;
 uniform float uLowHp;
 uniform vec3 uPaper;
 uniform vec3 uInks[6];
@@ -208,6 +209,21 @@ void main() {
   float ew = 0.75 + 0.35 * vnoise(pp * 0.35);
   col = mix(col, inkColor(inkId) * 0.92, clamp(edge * ew, 0.0, 1.0) * fadeE);
 
+  // Dust II uses warm plaster/stone surfaces and sky, preserving readable silhouettes.
+  if (uDesert > 0.5) {
+    vec3 base = vec3(0.72, 0.76, 0.77);
+    if (s.g > 0.5 && s.g < 1.5) base = vec3(0.76, 0.16, 0.10);
+    else if (s.g > 1.5 && s.g < 2.5) base = vec3(0.30, 0.22, 0.15);
+    else if (s.g > 2.5 && s.g < 3.5) base = vec3(0.83, 0.71, 0.53);
+    else if (s.g > 3.5 && s.g < 4.5) base = vec3(0.42, 0.44, 0.28);
+    else if (s.g > 4.5) base = vec3(0.65, 0.58, 0.46);
+    float light = shade < 0.0 ? 0.6 : 0.55 + 0.45 * shade;
+    col = base * light * (0.98 + 0.035 * grain);
+    col *= 1.0 - edge * 0.21 * fadeE;
+    col = mix(col, vec3(0.82, 0.83, 0.79), smoothstep(65.0, 240.0, d) * 0.28);
+    if (sky) col = mix(vec3(0.78, 0.85, 0.88), vec3(0.40, 0.65, 0.83), smoothstep(0.0, 1.0, vUv.y));
+  }
+
   // hurt: red scribble vignette; low hp: pulsing
   vec2 vc = (vUv - 0.5) * vec2(uAspect, 1.0);
   float vig = smoothstep(0.32, 0.9, length(vc));
@@ -227,14 +243,14 @@ export class InkRenderer {
     this.renderer.autoClear = false;
     this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(80, 1, 0.08, 420);
+    this.camera = new THREE.PerspectiveCamera(80, 1, 0.08, 650);
     const depthTexture = new THREE.DepthTexture(2, 2); depthTexture.format = THREE.DepthFormat; depthTexture.type = THREE.FloatType;
     this.rt = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthTexture, depthBuffer: true, stencilBuffer: false, generateMipmaps: false });
     this.post = new THREE.ShaderMaterial({
       uniforms: {
         tScene: { value: this.rt.texture }, tDepth: { value: depthTexture }, uRes: { value: new THREE.Vector2(2, 2) }, uAspect: { value: 1 },
         uTime: { value: 0 }, uNear: { value: this.camera.near }, uFar: { value: this.camera.far }, uHurt: { value: 0 }, uFlash: { value: 0 }, uSlow: { value: 0 },
-        uLowHp: { value: 0 }, uLineSpacing: { value: 60 }, uPaper: { value: new THREE.Vector3(0.965, 0.955, 0.905) }, uInks: { value: INK_COLORS },
+        uDesert: { value: 0 }, uLowHp: { value: 0 }, uLineSpacing: { value: 60 }, uPaper: { value: new THREE.Vector3(0.965, 0.955, 0.905) }, uInks: { value: INK_COLORS },
         uInvProj: { value: new THREE.Matrix4() }, uInvView: { value: new THREE.Matrix4() },
       },
       vertexShader: postVert, fragmentShader: postFrag, depthTest: false, depthWrite: false,

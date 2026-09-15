@@ -4,6 +4,7 @@ import { makeInkMaterial, INK } from './render.js';
 import { SEE_THROUGH } from './physics.js';
 import { rand, clamp, damp, lerp, Spring3, TAU } from './util.js';
 import { audio } from './audio.js';
+import { MELEE } from './combat.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
@@ -26,7 +27,7 @@ function makeFlash(parent, x, y, z, scale) {
   g.position.set(x, y, z); g.scale.setScalar(scale); g.visible = false; parent.add(g); return g;
 }
 
-class ViewModel {
+export class ViewModel {
   constructor(ctx) {
     this.ctx = ctx; this.root = new THREE.Group(); this.scale = 0.46; this.root.scale.setScalar(this.scale); this.root.visible = false;
     this.basePos = new THREE.Vector3(0.2, -0.17, -0.36); this.baseRot = new THREE.Vector3(0, 0, 0);
@@ -63,28 +64,73 @@ class ViewModel {
 }
 
 const GUNS = {
-  rifle: { name: '步枪', hint: '全自动 · 让红点对准他们', kind: 'rifle', magSize: 35, reserve: 175, maxReserve: 350, interval: 1 / 11, damage: 24, headMul: 2.6, pellets: 1, spread: 0.016, adsSpread: 0.0034, spreadKick: 0.009, spreadMax: 0.075, adsFov: 58, sight: [0, 0.12, -0.05, 0.3], camKick: [0.009, 0.0034], modelKick: [0.25, 0.3, 2.4, -3.2, 0.9, 1.2], fovKick: 1.2, reloadDur: 1.45, reloadType: 'mag', auto: true, falloff: null, tracer: 0.02, flashScale: 1, sound: 'shot', shell: [0.02, INK.ORANGE], moveSpread: 0.0012, pvp: [19, 1.8, null] },
-  shotgun: { name: '霰弹枪', hint: '泵动 · 近距离威力惊人', kind: 'shotgun', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.78, damage: 19, headMul: 1.8, pellets: 10, spread: 0.062, adsSpread: 0.034, spreadKick: 0, spreadMax: 0.1, adsFov: 68, sight: [0, 0.095, -1.0, 0.52], camKick: [0.05, 0.012], modelKick: [0.4, 0.6, 5, -9, 2, 3], fovKick: 4, reloadDur: 0.45, reloadType: 'shells', auto: false, falloff: [11, 32, 0.22], tracer: 0.014, flashScale: 1.9, sound: 'shotgunFire', shell: [0.035, INK.RED], moveSpread: 0.0006, cycleDur: 0.45, pvp: [16, 1.6, [9, 26, 0.15]] },
-  sniper: { name: '狙击枪', hint: '栓动狙击 · 一枪一个擦除', kind: 'sniper', scope: true, magSize: 5, reserve: 25, maxReserve: 50, interval: 0.2, damage: 150, headMul: 3, pellets: 1, spread: 0.075, adsSpread: 0.0004, spreadKick: 0.05, spreadMax: 0.14, adsFov: 20, sight: [0, 0.135, 0, 0.42], camKick: [0.055, 0.008], modelKick: [0.25, 0.8, 4.5, -11, 1.2, 2], fovKick: 4.5, reloadDur: 2.1, reloadType: 'mag', auto: false, falloff: null, tracer: 0.03, flashScale: 1.7, sound: 'sniperFire', shell: [0.03, INK.ORANGE], moveSpread: 0.004, cycleDur: 0.85, pvp: [150, 1.5, null] },
-  revolver: { name: '左轮手枪', hint: '手炮 · 爆头即擦除', kind: 'revolver', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.3, damage: 62, headMul: 3, pellets: 1, spread: 0.006, adsSpread: 0.002, spreadKick: 0.02, spreadMax: 0.06, adsFov: 52, sight: [0, 0.08, -0.34, 0.42], camKick: [0.038, 0.007], modelKick: [0.3, 0.9, 3.2, -10, 1.5, 2.5], fovKick: 2.5, reloadDur: 1.9, reloadType: 'cylinder', auto: false, falloff: null, tracer: 0.026, flashScale: 1.35, sound: 'revolver', shell: null, moveSpread: 0.0015, pvp: [52, 2.9, [9, 34, 0.42]] },
+  rifle: { name: 'Tüfek', hint: 'Otomatik · Sağ tık ile nişan al', kind: 'rifle', magSize: 35, reserve: 175, maxReserve: 350, interval: 1 / 11, damage: 24, headMul: 2.6, pellets: 1, spread: 0.016, adsSpread: 0.0034, spreadKick: 0.009, spreadMax: 0.075, adsFov: 58, sight: [0, 0.12, -0.05, 0.3], camKick: [0.009, 0.0034], modelKick: [0.25, 0.3, 2.4, -3.2, 0.9, 1.2], fovKick: 1.2, reloadDur: 1.45, reloadType: 'mag', auto: true, falloff: null, tracer: 0.02, flashScale: 1, sound: 'shot', shell: [0.02, INK.ORANGE], moveSpread: 0.0012, pvp: [19, 1.8, null] },
+  shotgun: { name: 'Pompalı', hint: 'Yakından güçlü · Doldurmayı ateş ederek kes', kind: 'shotgun', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.78, damage: 19, headMul: 1.8, pellets: 10, spread: 0.062, adsSpread: 0.034, spreadKick: 0, spreadMax: 0.1, adsFov: 68, sight: [0, 0.095, -1.0, 0.52], camKick: [0.05, 0.012], modelKick: [0.4, 0.6, 5, -9, 2, 3], fovKick: 4, reloadDur: 0.45, reloadType: 'shells', auto: false, falloff: [11, 32, 0.22], tracer: 0.014, flashScale: 1.9, sound: 'shotgunFire', shell: [0.035, INK.RED], moveSpread: 0.0006, cycleDur: 0.45, pvp: [16, 1.6, [9, 26, 0.15]] },
+  sniper: { name: 'Keskin nişancı', hint: 'Uzun menzil · Sağ tık ile dürbün', kind: 'sniper', scope: true, magSize: 5, reserve: 25, maxReserve: 50, interval: 0.2, damage: 150, headMul: 3, pellets: 1, spread: 0.075, adsSpread: 0.0004, spreadKick: 0.05, spreadMax: 0.14, adsFov: 20, sight: [0, 0.135, 0, 0.42], camKick: [0.055, 0.008], modelKick: [0.25, 0.8, 4.5, -11, 1.2, 2], fovKick: 4.5, reloadDur: 2.1, reloadType: 'mag', auto: false, falloff: null, tracer: 0.03, flashScale: 1.7, sound: 'sniperFire', shell: [0.03, INK.ORANGE], moveSpread: 0.004, cycleDur: 0.85, pvp: [150, 1.5, null] },
+  revolver: { name: 'Revolver', hint: 'Solo: sınırsız yedek · 6 atış, sonra R ile doldur', kind: 'revolver', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.4, damage: 42, headMul: 2.4, pellets: 1, spread: 0.006, adsSpread: 0.002, spreadKick: 0.02, spreadMax: 0.06, adsFov: 52, sight: [0, 0.08, -0.34, 0.42], camKick: [0.038, 0.007], modelKick: [0.3, 0.9, 3.2, -10, 1.5, 2.5], fovKick: 2.5, reloadDur: 1.6, reloadType: 'cylinder', auto: false, falloff: null, tracer: 0.026, flashScale: 1.35, sound: 'revolver', shell: null, moveSpread: 0.0015, pvp: [42, 2.4, [9, 34, 0.42]] },
+  smg: { name: 'SMG', hint: 'Hızlı atış · Hareket halinde yakın çatışma', kind: 'smg', magSize: 28, reserve: 168, maxReserve: 336, interval: 1 / 16, damage: 16, headMul: 2, pellets: 1, spread: 0.022, adsSpread: 0.007, spreadKick: 0.005, spreadMax: 0.065, adsFov: 64, sight: [0, 0.09, -0.1, 0.32], camKick: [0.006, 0.004], modelKick: [0.2, 0.2, 1.7, -2, 1, 1.5], fovKick: 0.7, reloadDur: 1.15, reloadType: 'mag', auto: true, falloff: [12, 38, 0.35], tracer: 0.016, flashScale: 0.8, sound: 'shot', shell: [0.018, INK.ORANGE], moveSpread: 0.0005, pvp: [13, 1.7, [10, 30, 0.3]] },
 };
+
+const ARSENAL = {
+  ak47: { name: 'AK-47', hint: 'Güçlü otomatik · Kontrollü kısa seriler', damage: 31, interval: 1 / 8, magSize: 30, reserve: 150, maxReserve: 300, spread: .02, adsSpread: .0045, camKick: [.018, .005], reloadDur: 1.9, pvp: [24, 1.8, [18, 60, .45]] },
+  m4a1: { name: 'M4A1', hint: 'Dengeli otomatik · Düşük geri tepme', damage: 22, interval: 1 / 12, magSize: 30, reserve: 180, maxReserve: 360, spread: .012, adsSpread: .0025, camKick: [.007, .002], reloadDur: 1.5, pvp: [17, 1.8, [20, 65, .4]] },
+  famas: { name: 'FAMAS', hint: 'Her tıklamada 3 mermi · Orta menzil', damage: 25, interval: .075, magSize: 30, reserve: 150, maxReserve: 300, spread: .012, adsSpread: .002, camKick: [.009, .002], reloadDur: 1.7, auto: false, burstSize: 3, pvp: [19, 1.8, [22, 65, .5]] },
+  m249: { name: 'M249', hint: '75 mermilik şerit · Uzun baskı ateşi · Yavaş doldurma', damage: 23, interval: 1 / 12, magSize: 75, reserve: 225, maxReserve: 450, spread: .025, adsSpread: .008, spreadMax: .09, camKick: [.011, .006], reloadDur: 3.6, pvp: [18, 1.7, [22, 70, .4]], moveSpread: .002 },
+  dmr: { name: 'DMR', hint: 'Yarı otomatik · Hassas uzun menzil', damage: 65, interval: .36, magSize: 12, reserve: 72, maxReserve: 144, spread: .03, adsSpread: .0008, camKick: [.026, .003], reloadDur: 1.85, adsFov: 38, auto: false, headMul: 2.4, pvp: [45, 2, [35, 100, .65]] },
+};
+Object.assign(GUNS.sniper, { scopeZooms: [2, 4, 8], zoomIndex: 1, hint: 'Dürbün 2–8× · Sağ tık + tekerlek' });
+Object.assign(ARSENAL.famas, { sight: [0, .25, -.08, .38] });
+Object.assign(ARSENAL.dmr, { scope: true, scopeZooms: [2, 3, 4, 6], zoomIndex: 0, hint: 'Yarı otomatik · Dürbün 2–6× · Sağ tık + tekerlek' });
+ARSENAL.dual = { name: 'Çift Tabanca', hint: 'İki el · Sırayla ateş · 30 mermi', damage: 28, magSize: 30, reserve: 150, maxReserve: 300, interval: .135, reloadDur: 2.25, auto: false, spread: .024, adsSpread: .012, adsFov: 66, camKick: [.012, .006], modelKick: [0, 0, 0, 0, 0, 0], falloff: [14, 45, .4], pvp: [23, 1.8, [12, 40, .4]], sound: 'revolver', flashScale: .7, fovKick: .8 };
+for (const [kind, spec] of Object.entries(ARSENAL)) GUNS[kind] = { ...GUNS.rifle, ...spec, kind };
 
 export class Gun extends ViewModel {
   constructor(ctx, type) {
     super(ctx); Object.assign(this, GUNS[type]); this.isGun = true; this.mag = this.magSize;
     this.fireT = 0; this.reloading = false; this.reloadT = 0; this.spreadCur = this.spread; this.flashT = 0; this.pumpT = 0; this.racked = false; this.needPump = false;
     this.mat = makeInkMaterial({ ink: INK.BLUE }); this.dark = makeInkMaterial({ ink: INK.BLACK }); this.red = makeInkMaterial({ ink: INK.RED, fill: true });
-    this.build(); this.setSight(...this.sight);
+    this.build(); this.setSight(...this.sight); if (this.scope) this.changeZoom(0);
+  }
+  get scopeZoom() { return this.scopeZooms?.[this.zoomIndex] || 1; }
+  changeZoom(step) {
+    if (!this.scopeZooms) return;
+    this.zoomIndex = clamp((this.zoomIndex || 0) + step, 0, this.scopeZooms.length - 1);
+    this.adsFov = 2 * Math.atan(Math.tan(40 * Math.PI / 180) / this.scopeZoom) * 180 / Math.PI;
   }
   get spreadPx() { return 5 + this.spreadCur * 900; }
+  get infiniteReserve() { return this.kind === 'revolver' && this.ctx.game.mode === 'solo'; }
+  get reserveText() { return this.infiniteReserve ? '∞' : this.reserve; }
+  get canReload() { return this.infiniteReserve || this.reserve > 0; }
+  cancelReload() {
+    this.reloading = false; this.reloadT = 0; this.autoReloadT = 0; this.burstLeft = 0;
+    if (this.magMesh) { this.magMesh.position.y = this.magY; this.magMesh.rotation.z = 0; }
+    if (this.cylGroup) this.cylGroup.rotation.z = 0;
+    if (this.handL) this.handL.position.copy(this.handLPos);
+  }
+  unequip() { super.unequip(); this.cancelReload(); this.flash.visible = false; }
+  reset() {
+    this.cancelReload(); this.mag = this.magSize; this.reserve = this.startReserve;
+    this.fireT = this.pumpT = this.flashT = 0; this.needPump = this.pumped = false;
+    this.spreadCur = this.spread; this.flash.visible = false; this.aimAmt = 0;
+    if (this.foreEnd) this.foreEnd.position.z = this.foreEndZ;
+    if (this.boltH) { this.boltH.position.z = this.boltZ; this.boltH.rotation.z = 0; }
+    for (const spring of [this.recoil, this.recoilRot]) { spring.value.set(0, 0, 0); spring.vel.set(0, 0, 0); }
+  }
+  loadMagazine() {
+    const take = Math.min(this.magSize - this.mag, this.infiniteReserve ? this.magSize : this.reserve);
+    this.mag += take; if (!this.infiniteReserve) this.reserve -= take;
+    this.reloading = false;
+  }
   addAmmo(n) { this.reserve = Math.min(this.reserve + n, this.maxReserve); }
   startReload() {
-    if (this.reloading || this.mag >= this.magSize || this.reserve <= 0) return;
-    this.reloading = true; this.reloadT = 0; this.racked = false;
+    if (this.reloading || this.mag >= this.magSize || !this.canReload) return;
+    this.reloading = true; this.reloadT = 0; this.racked = false; this.burstLeft = 0;
     if (this.reloadType === 'shells') audio.shell(); else if (this.reloadType === 'cylinder') audio.cylinder(); else audio.reload();
   }
   update(dt, st) {
     this.fireT -= dt; if (this.flashT > 0) { this.flashT -= dt; if (this.flashT <= 0) this.flash.visible = false; }
+    if (this.autoReloadT > 0) { this.autoReloadT -= dt; if (this.autoReloadT <= 0 && this.mag === 0) this.startReload(); }
+    if (this.mag === 0 && this.canReload && this.pumpT <= 0 && !this.reloading && !(this.autoReloadT > 0)) this.startReload();
     // moving and flying bloom the shot; aiming down the sights steadies most of that, the scope nearly all of it
     const base = st.aim ? this.adsSpread : this.spread; let moveAdd = Math.min(st.speed, 24) * this.moveSpread + (st.grounded ? 0 : 0.01) + (st.sliding ? 0.008 : 0);
     if (st.aim) moveAdd *= this.scope ? 0.03 : 0.3;
@@ -106,14 +152,14 @@ export class Gun extends ViewModel {
         r.x += -0.3 * tilt; r.z += 0.5 * tilt; r.y += 0.25 * tilt; p.y -= 0.07 * tilt; p.x += 0.03 * tilt;
         const mt = clamp((t - 0.18) / 0.5, 0, 1); this.magMesh.position.y = this.magY - Math.sin(mt * Math.PI) * 0.3; this.magMesh.rotation.z = Math.sin(mt * Math.PI) * 0.6;
         if (t > 0.86 && !this.racked) { this.racked = true; this.recoilRot.kick(-2.5, 0, 0); this.recoil.kick(0, 0, 0.6); }
-        if (this.reloadT >= this.reloadDur) { const take = Math.min(this.magSize - this.mag, this.reserve); this.mag += take; this.reserve -= take; this.reloading = false; }
+        if (this.reloadT >= this.reloadDur) this.loadMagazine();
         return;
       }
       if (this.reloadType === 'cylinder') {
         const t = this.reloadT / this.reloadDur; const open = t < 0.25 ? easeOut(t / 0.25) : t > 0.8 ? 1 - easeOut((t - 0.8) / 0.2) : 1;
         r.z += 0.9 * open; r.x += 0.3 * open; p.x -= 0.05 * open; p.y += 0.02 * open; this.cylGroup.rotation.z = -1.5 * open;
         if (t > 0.3 && !this.racked) { this.racked = true; for (let i = 0; i < 6; i++) this._ejectShell(0.7); audio.shell(); }
-        if (this.reloadT >= this.reloadDur) { const take = Math.min(this.magSize - this.mag, this.reserve); this.mag += take; this.reserve -= take; this.reloading = false; this.cylGroup.rotation.z = 0; }
+        if (this.reloadT >= this.reloadDur) { this.loadMagazine(); this.cylGroup.rotation.z = 0; }
         return;
       }
       // shells: one at a time, can be interrupted by firing
@@ -121,10 +167,10 @@ export class Gun extends ViewModel {
       r.z += 0.35 * s; r.x += 0.15 * s; p.y -= 0.04 * s; if (this.handL) this.handL.position.set(this.handLPos.x + 0.1 * s, this.handLPos.y - 0.12 * s, this.handLPos.z + 0.55 * s);
       if (this.reloadT >= this.reloadDur) { this.mag++; this.reserve--; this.reloadT = 0; if (this.mag >= this.magSize || this.reserve <= 0) { this.reloading = false; if (this.handL) this.handL.position.copy(this.handLPos); if (this.needPump) this.pumpT = this.cycleDur; } else audio.shell(); }
     }
-    if (st.reloadPressed && this.mag < this.magSize && this.reserve > 0 && !this.reloading && this.pumpT <= 0) { this.startReload(); return; }
-    const wantFire = this.auto ? st.fire : st.firePressed;
+    if (st.reloadPressed && this.mag < this.magSize && this.canReload && !this.reloading && this.pumpT <= 0) { this.startReload(); return; }
+    const wantFire = this.burstSize ? (this.burstLeft > 0 || st.firePressed) : this.auto ? st.fire : st.firePressed;
     if (wantFire && this.fireT <= 0 && this.pumpT <= 0 && !st.blockFire) {
-      if (this.mag <= 0) { if (st.firePressed) { audio.empty(); this.startReload(); } }
+      if (this.mag <= 0) { if (st.firePressed) { audio.empty(); this.startReload(); if (!this.canReload && this.ctx.game.mode === 'solo') this.ctx.hud.tip('Mermi bitti · 5: Revolver · F: Katana ile cephane kazan', 3); } }
       else { if (this.reloading) { this.reloading = false; if (this.handL) this.handL.position.copy(this.handLPos); } this.fire(st); }
     }
   }
@@ -144,12 +190,13 @@ export class Gun extends ViewModel {
     P.recoil(this.camKick[0] * (st.aim ? 0.7 : 1) + rand(0, this.camKick[0] * 0.3), rand(-this.camKick[1], this.camKick[1])); P.kickFov(this.fovKick);
     audio[this.sound](); ctx.input.rumble(0.15 + this.fovKick * 0.08, 0.5, 40 + this.fovKick * 15); ctx.effects.shakeAmt += 0.02 + this.fovKick * 0.02;
     if (hits > 0 && this.kind === 'shotgun') ctx.game.hitstop(0.03, 0.3);
-    if (this.mag === 0 && this.reloadType === 'mag') setTimeout(() => { if (this.mag === 0 && !this.reloading) this.startReload(); }, 250);
+    if (this.burstSize) { this.burstLeft = (this.burstLeft || this.burstSize) - 1; if (this.burstLeft === 0) this.fireT = .32; }
+    if (this.mag === 0) { this.autoReloadT = 0.25; this.burstLeft = 0; }
   }
   fireRay(origin, dir) {
-    const ctx = this.ctx; const hitE = ctx.enemies.raycast(origin, dir, 300), hitW = ctx.world.raycast(origin, dir, 300, SEE_THROUGH); let end, hit = false;
+    const ctx = this.ctx, range = this.scope ? 600 : 300; const hitE = ctx.enemies.raycast(origin, dir, range), hitW = ctx.world.raycast(origin, dir, range, SEE_THROUGH); let end, hit = false;
     // other players in a versus match are targets too; the closest thing along the ray wins
-    const hitP = ctx.raycastPlayers ? ctx.raycastPlayers(origin, dir, 300) : null;
+    const hitP = ctx.raycastPlayers ? ctx.raycastPlayers(origin, dir, range) : null;
     if (hitP && (!hitE || hitP.dist < hitE.dist) && (!hitW || hitP.dist < hitW.dist)) {
       end = hitP.point; const crit = hitP.part === 'head'; const pv = this.pvp || [this.damage, this.headMul, this.falloff]; let d = pv[0] * (crit ? pv[1] : 1);
       if (pv[2]) d *= clamp(1 - (hitP.dist - pv[2][0]) / (pv[2][1] - pv[2][0]), pv[2][2], 1);
@@ -161,7 +208,7 @@ export class Gun extends ViewModel {
       if (this.falloff) d *= clamp(1 - (hitE.dist - this.falloff[0]) / (this.falloff[1] - this.falloff[0]), this.falloff[2], 1);
       ctx.enemies.damage(hitE.enemy, d, { point: hitE.point, dir, part: hitE.part, source: this.kind, crit }); hit = true;
     } else if (hitW) { end = hitW.point; ctx.effects.bulletImpact(hitW.point, hitW.normal, INK.BLUE); if (Math.random() < 0.25) audio.ricochet(hitW.point); }
-    else end = origin.clone().addScaledVector(dir, 300);
+    else end = origin.clone().addScaledVector(dir, range);
     this.muzzle.getWorldPosition(_v); ctx.effects.tracer(_v, end, INK.BLUE, this.tracer, 0.05);
     if (ctx.onShot) ctx.onShot(end);
     return hit;
@@ -171,6 +218,84 @@ export class Gun extends ViewModel {
     _v2.copy(P.right).multiplyScalar(rand(1.5, 2.5) * spread).addScaledVector(P.forward, rand(-0.5, 0.5)); _v2.y += rand(1.5, 2.8);
     this.ctx.effects.shell(_v, _v2, this.shell[1], this.shell[0]);
   }
+}
+
+export class ArsenalGun extends Gun {
+  constructor(ctx, kind) { super(ctx, kind); }
+  build() {
+    const g = this.root, mat = this.mat, dark = this.dark, k = this.kind;
+    const wood = makeInkMaterial({ ink: INK.ORANGE }), short = k === 'famas', heavy = k === 'm249';
+    const barrelEnd = short ? -.68 : k === 'dmr' ? -1.3 : -1.02;
+    bx(heavy ? .15 : .09, .13, short ? .36 : .56, 0, 0, 0, mat, g);
+    cyl(heavy ? .029 : .02, Math.abs(barrelEnd) - .3, 0, .025, (barrelEnd - .3) / 2, dark, g);
+    cyl(.032, .09, 0, .025, barrelEnd, dark, g);
+    bx(.085, .085, .28, 0, -.01, -.4, k === 'ak47' ? wood : mat, g);
+    const stock = bx(.07, .12, k === 'famas' ? .28 : .33, 0, -.02, .38, k === 'ak47' ? wood : dark, g); stock.rotation.x = k === 'ak47' ? -.15 : 0;
+    bx(.05, .15, .07, 0, -.13, .12, dark, g).rotation.x = .25;
+    this.magMesh = new THREE.Group(); this.magY = -.16; this.magMesh.position.set(0, this.magY, k === 'famas' ? .24 : -.07); g.add(this.magMesh);
+    if (heavy) bx(.20, .22, .20, 0, -.03, 0, wood, this.magMesh);
+    else if (k === 'ak47') {
+      for (let i = 0; i < 4; i++) bx(.06, .065, .12, 0, -i * .053, i * i * .008, dark, this.magMesh).rotation.x = i * .13;
+    } else bx(.055, k === 'dmr' ? .12 : .22, .105, 0, -.04, 0, mat, this.magMesh);
+    if (k === 'famas') {
+      frame(.10, .09, .016, .3, 0, .14, .02, dark, g);
+      frame(.095, .075, .008, .018, 0, .25, -.08, mat, g);
+      this.sightDot = sph(.003, 0, .25, -.08, this.red, g);
+    } else if (k === 'dmr') {
+      cyl(.047, .42, 0, .15, -.06, mat, g); cyl(.06, .06, 0, .15, -.28, dark, g);
+      for (const z of [-.2, .08]) bx(.03, .09, .03, 0, .09, z, dark, g);
+    } else {
+      frame(.075, .07, .012, .03, 0, .12, -.05, mat, g);
+      sph(.003, 0, .12, -.05, this.red, g);
+    }
+    if (k === 'm4a1') for (let i = 0; i < 6; i++) bx(.10, .025, .015, 0, .05, -.28 - i * .035, dark, g);
+    if (heavy || k === 'dmr') for (const x of [-.055, .055]) bx(.02, .22, .02, x, -.10, -.65, dark, g).rotation.z = x * 5;
+    hand(mat, .02, -.16, .13, g); this.handL = hand(mat, -.05, -.08, -.4, g, [-.35, -.9, .9]); this.handLPos = this.handL.position.clone();
+    this.muzzle = new THREE.Object3D(); this.muzzle.position.set(0, .025, barrelEnd - .05); g.add(this.muzzle);
+    this.ejectPt = new THREE.Object3D(); this.ejectPt.position.set(.07, .03, .02); g.add(this.ejectPt);
+    this.flash = makeFlash(g, 0, .025, barrelEnd - .05, 1);
+  }
+}
+
+export class DualPistols extends Gun {
+  constructor(ctx) { super(ctx, 'dual'); this.basePos.set(0, -.17, -.38); this.aimPos.set(0, -.14, -.42); }
+  build() {
+    this.hands = []; this.nextHand = 0;
+    this.magMesh = new THREE.Group(); this.magY = -.16; this.root.add(this.magMesh);
+    for (const side of [-1, 1]) {
+      const g = new THREE.Group(); g.position.x = side * .47; this.root.add(g);
+      bx(.095, .105, .42, 0, .035, -.08, this.mat, g);
+      cyl(.023, .13, 0, .035, -.32, this.dark, g);
+      const slide = bx(.098, .055, .38, 0, .105, -.075, this.mat, g);
+      bx(.073, .2, .11, 0, -.11, .065, this.dark, g).rotation.x = -.2;
+      frame(.075, .075, .012, .12, 0, -.05, -.06, this.dark, g);
+      bx(.03, .025, .018, 0, .146, -.24, this.red, g);
+      const magazine = bx(.065, .15, .075, 0, -.17, .06, this.mat, g);
+      hand(this.mat, 0, -.12, .07, g, [side * .35, -.65, 1], .6);
+      const muzzle = new THREE.Object3D(); muzzle.position.set(0, .035, -.40); g.add(muzzle);
+      const eject = new THREE.Object3D(); eject.position.set(side * .06, .09, .02); g.add(eject);
+      const flash = makeFlash(g, 0, .035, -.4, .7);
+      this.hands.push({ root: g, slide, magazine, muzzle, eject, flash, kick: 0, flashLife: 0, side });
+    }
+    this.muzzle = this.hands[0].muzzle; this.ejectPt = this.hands[0].eject; this.flash = this.hands[0].flash;
+  }
+  fire(st) {
+    const h = this.hands[this.nextHand]; this.lastFiredHand = this.nextHand; this.nextHand = 1 - this.nextHand;
+    this.muzzle = h.muzzle; this.ejectPt = h.eject; this.flash = h.flash;
+    super.fire(st); h.kick = .24; h.flashLife = .045;
+  }
+  update(dt, st) {
+    super.update(dt, st);
+    const reload = this.reloading ? Math.sin(Math.min(1, this.reloadT / this.reloadDur) * Math.PI) : 0;
+    for (const h of this.hands) {
+      h.kick = damp(h.kick, 0, 22, dt); h.flashLife -= dt; h.flash.visible = h.flashLife > 0;
+      h.root.rotation.x = h.kick; h.root.rotation.z = h.side * reload * .35;
+      h.root.position.y = -reload * .15; h.slide.position.z = -.075 + h.kick * .45;
+      h.magazine.position.y = -.17 - reload * .28;
+    }
+  }
+  unequip() { super.unequip(); for (const h of this.hands) { h.flash.visible = false; h.flashLife = 0; } }
+  reset() { super.reset(); this.nextHand = 0; for (const h of this.hands) { h.kick = h.flashLife = 0; h.flash.visible = false; h.root.rotation.set(0,0,0); h.root.position.y = 0; h.magazine.position.y = -.17; h.slide.position.z = -.075; } }
 }
 
 export class Rifle extends Gun {
@@ -203,6 +328,22 @@ export class Shotgun extends Gun {
     this.muzzle = new THREE.Object3D(); this.muzzle.position.set(0, 0.05, -1.09); g.add(this.muzzle);
     this.ejectPt = new THREE.Object3D(); this.ejectPt.position.set(0.06, 0.03, 0.05); g.add(this.ejectPt);
     this.flash = makeFlash(g, 0, 0.05, -1.09, 1);
+  }
+}
+export class SMG extends Gun {
+  constructor(ctx) { super(ctx, 'smg'); this.basePos.set(0.19, -0.18, -0.32); }
+  build() {
+    const g = this.root, mat = this.mat, dark = this.dark;
+    bx(0.09, 0.13, 0.32, 0, 0, 0, mat, g);
+    cyl(0.022, 0.25, 0, 0.025, -0.27, dark, g);
+    bx(0.06, 0.07, 0.23, 0, -0.025, 0.25, dark, g);
+    this.magMesh = bx(0.052, 0.25, 0.085, 0, -0.17, -0.025, mat, g); this.magY = -0.17;
+    bx(0.05, 0.13, 0.07, 0, -0.12, 0.12, dark, g).rotation.x = 0.2;
+    frame(0.07, 0.055, 0.01, 0.02, 0, 0.09, -0.1, mat, g); sph(0.002, 0, 0.09, -0.1, this.red, g);
+    hand(mat, 0.02, -0.15, 0.13, g); this.handL = hand(mat, -0.05, -0.07, -0.15, g, [-0.35, -0.9, 0.9]); this.handLPos = this.handL.position.clone();
+    this.muzzle = new THREE.Object3D(); this.muzzle.position.set(0, 0.025, -0.41); g.add(this.muzzle);
+    this.ejectPt = new THREE.Object3D(); this.ejectPt.position.set(0.06, 0.02, 0); g.add(this.ejectPt);
+    this.flash = makeFlash(g, 0, 0.025, -0.41, 0.8);
   }
 }
 export class Revolver extends Gun {
@@ -251,9 +392,9 @@ export class Sniper extends Gun {
 
 export class Katana extends ViewModel {
   constructor(ctx) {
-    super(ctx); this.name = '太刀'; this.hint = '挥砍 · 按住瞄准格挡并反弹子弹'; this.kind = 'katana';
+    super(ctx); this.name = 'Katana'; this.hint = 'Geniş savuruş · Sağ tık ile gard al'; this.kind = 'katana';
     this.basePos.set(0.27, -0.25, -0.4); this.baseRot.set(0.75, 0.15, -0.35); this.aimPos.copy(this.basePos);
-    this.slashT = 0; this.slashDur = 0.27; this.combo = 0; this.comboT = 0; this.blocking = false; this.blockT = 0; this.blockAmt = 0; this.hitDone = false; this.cooldown = 0; this.damage = 75;
+    this.slashT = 0; this.slashDur = 0.3; this.combo = 0; this.comboT = 0; this.blocking = false; this.blockT = 0; this.blockAmt = 0; this.hitDone = false; this.cooldown = 0; this.damage = 90; this.hitTargets = new Set(); this.hitFeedback = false;
     // guard pose: the sword simply comes in close to the face, held upright
     this.blockPos = new THREE.Vector3(0.21, -0.31, -0.36); this.blockRot = new THREE.Vector3(1.40, 0.30, 1.24); this.deflectKick = 0;
     this.parrySwing = 0; this.parryDir = 1; this.bloodLevel = 0;
@@ -294,8 +435,20 @@ export class Katana extends ViewModel {
       this.smears.push({ mesh: m, at, base: len, side });
     }
   }
+  get scopeZoom() { return this.scopeZooms?.[this.zoomIndex] || 1; }
+  changeZoom(step) {
+    if (!this.scopeZooms) return;
+    this.zoomIndex = clamp((this.zoomIndex || 0) + step, 0, this.scopeZooms.length - 1);
+    this.adsFov = 2 * Math.atan(Math.tan(40 * Math.PI / 180) / this.scopeZoom) * 180 / Math.PI;
+  }
   get spreadPx() { return 4; }
+  reset() {
+    this.slashT = this.cooldown = this.combo = this.comboT = this.blockT = this.blockAmt = this.aimAmt = this.parrySwing = this.deflectKick = 0;
+    this.blocking = false; this.hitTargets.clear(); this.hitFeedback = false; this.bloodLevel = 0;
+  }
+  unequip() { super.unequip(); this.slashT = 0; this.blocking = false; this.blockAmt = 0; this.hitTargets.clear(); }
   startSlash(st) {
+    this.hitTargets.clear(); this.hitFeedback = false;
     this.slashT = this.slashDur; this.hitDone = false; this.combo++; this.comboT = 0.9; this.cooldown = this.slashDur + 0.06;
     audio.katanaSwing(); this.ctx.player.kickFov(2);
     if (st.sprinting || !st.grounded) this.ctx.player.lunge(5.5);
@@ -332,24 +485,25 @@ export class Katana extends ViewModel {
       p.x += this.parryDir * e * 0.035;
     }
     if (this.slashT > 0) {
+      const previousT = 1 - this.slashT / this.slashDur;
       this.slashT -= dt; const t = clamp(1 - this.slashT / this.slashDur, 0, 1); const e = easeInOut(t); const s = this.combo % 2 === 0 ? -1 : 1;
       r.z += s * (1.3 - 2.7 * e); r.x += 0.7 - 1.5 * e; r.y += s * (-0.35 + 0.8 * e);
       p.x += s * (0.2 - 0.45 * e); p.y += 0.14 - 0.24 * e; p.z -= 0.12 * Math.sin(t * Math.PI);
-      if (!this.hitDone && t > 0.32) { this.hitDone = true; this.doHit(st, s); }
+      if (previousT < MELEE.activeEnd && t >= MELEE.activeStart) this.doHit(st, s);
     } else if ((st.firePressed || (st.fire && this.combo > 0)) && this.cooldown <= 0 && !st.blockFire) this.startSlash(st);
-    if (st.meleePressed && this.slashT <= 0 && this.cooldown <= 0) this.startSlash(st);
+    if (st.meleePressed && !st.blockFire && this.slashT <= 0 && this.cooldown <= 0) this.startSlash(st);
   }
   doHit(st, s) {
     const ctx = this.ctx, P = ctx.player;
-    const hits = ctx.enemies.inArc(P.eye, P.forward, 3.0, Math.cos(0.95));
+    const hits = ctx.enemies.inArc(P.eye, P.forward, MELEE.range, MELEE.cosHalf);
     _v2.copy(P.forward); _v.set(-P.forward.z, 0, P.forward.x).multiplyScalar(s * 0.7); _v2.add(_v).y -= 0.35; _v2.normalize();
     let any = false;
-    for (const h of hits) { any = true; const point = h.enemy.center.clone(); point.y += rand(-0.2, 0.4); ctx.enemies.damage(h.enemy, this.damage, { point, dir: _v2.clone(), part: 'torso', source: 'katana', crit: false, slashDir: s }); }
-    if (ctx.playersInArc) for (const t of ctx.playersInArc(P.eye, P.forward, 3.0, Math.cos(0.95))) { any = true; ctx.hitPlayer(t, 55, { point: t.center.clone(), dir: _v2.clone(), part: 'torso', source: 'katana', crit: false }); }
-    if (ctx.cutRopes && ctx.cutRopes(P.eye, P.forward, 3.4)) any = true;
-    if (ctx.breakablesInArc) for (const br of ctx.breakablesInArc(P.eye, P.forward, 3.2, Math.cos(1.0))) { any = true; ctx.breakHit(br, this.damage, br.pos.clone(), _v2.clone()); }
+    for (const h of hits) { if (this.hitTargets.has(h.enemy)) continue; this.hitTargets.add(h.enemy); any = true; const point = h.enemy.center.clone(); ctx.enemies.damage(h.enemy, this.damage, { point, dir: _v2.clone(), part: 'torso', source: 'katana', crit: false, slashDir: s }); }
+    if (ctx.playersInArc) for (const t of ctx.playersInArc(P.eye, P.forward, MELEE.range, MELEE.cosHalf)) { if (this.hitTargets.has(t)) continue; this.hitTargets.add(t); any = true; ctx.hitPlayer(t, 55, { point: t.center.clone(), dir: _v2.clone(), part: 'torso', source: 'katana', crit: false }); }
+    if (!this.hitTargets.has('ropes') && ctx.cutRopes && ctx.cutRopes(P.eye, P.forward, MELEE.range)) { this.hitTargets.add('ropes'); any = true; }
+    if (ctx.breakablesInArc) for (const br of ctx.breakablesInArc(P.eye, P.forward, MELEE.range, MELEE.cosHalf)) { if (this.hitTargets.has(br)) continue; this.hitTargets.add(br); any = true; ctx.breakHit(br, this.damage, br.pos.clone(), _v2.clone()); }
     // a swing only cuts; bullets are turned aside by the raised guard, never by a slash
-    if (any) { audio.katanaHit(); ctx.game.hitstop(0.07, 0.12); ctx.effects.shakeAmt += 0.12; ctx.input.rumble(0.7, 0.4, 90); this.recoil.kick(0, 0, 1.5); }
+    if (any && !this.hitFeedback) { this.hitFeedback = true; audio.katanaHit(); ctx.game.hitstop(0.045, 0.2); ctx.effects.shakeAmt += 0.12; ctx.input.rumble(0.7, 0.4, 90); this.recoil.kick(0, 0, 1.5); }
   }
   onDeflect(perfect) {
     this.parrySwing = 1; this.parryDir = -this.parryDir;
