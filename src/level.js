@@ -1,3 +1,4 @@
+import { ui } from './i18n.js';
 // Level construction. Two maps share one builder: everything is merged ink geometry plus
 // axis-aligned box colliders, which is what the navigation grid is generated from.
 import * as THREE from 'three';
@@ -10,7 +11,7 @@ import { addSkyAnimals } from './sky.js';
 
 // Doodle Mexico is built and kept, but off the menu until it is ready; flip this to offer it again
 export const MEXICO_READY = false;
-export const LEVELS = [{ key: 'district', name: 'Karalama Mahallesi', blurb: 'Sokaklar · Kule · Yangın merdivenleri', style: 'district' }, ...NEW_MAPS, ...(MEXICO_READY ? [{ key: 'mexico', name: 'Meksika Meydanı', blurb: 'Meydan · Pazar · Çan kulesi', style: 'mexico' }] : [])];
+export const LEVELS = [{ key: 'district', name: ui("Doodle District"), blurb: ui("Streets · Tower · Fire escapes"), style: 'district' }, ...NEW_MAPS, ...(MEXICO_READY ? [{ key: 'mexico', name: ui("Mexico Square"), blurb: ui("Square · Market · Bell tower"), style: 'mexico' }] : [])];
 
 function createBuilder(scene, world) {
   const geos = {}; const L = { rings: [], spawns: [], snipers: [], pickups: [], animated: [], meshes: [], playerStart: new THREE.Vector3(0, 0, 42), bounds: { minX: -55, maxX: 55, minZ: -55, maxZ: 55 }, arenaSpawns: [], grappleMovers: [], breakables: [], key: 'district' };

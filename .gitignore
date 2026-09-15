@@ -6,3 +6,6 @@ dist/
 .env
 .env.*
 __pycache__/
+.claude/
+.codex/
+.idea/

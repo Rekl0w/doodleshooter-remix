@@ -1,3 +1,4 @@
+import { ui } from './i18n.js';
 // First-person player: movement (sprint/slide/double-jump/mantle/air dash), swing-grapple, camera feel, health, weapons.
 import * as THREE from 'three';
 import { makeBody } from './physics.js';
@@ -98,7 +99,7 @@ export class Player {
     ctx.effects.strokeBurst(proj.pos, INK.BLUE, perfect ? 8 : 5, 4.5, { life: 0.2, size: 0.028 });
     ctx.input.rumble(0.4, 0.6, 70); ctx.game.hitstop(perfect ? 0.07 : 0.025, 0.18);
     ctx.effects.shakeAmt += 0.06; this.flashFx = perfect ? 0.35 : 0.1;
-    ctx.game.addScore(perfect ? 60 : 15, perfect ? 'Kusursuz savuşturma' : 'Savuşturuldu');
+    ctx.game.addScore(perfect ? 60 : 15, perfect ? ui("Perfect parry") : ui("Deflected"));
     return { perfect, ret };
   }
   get parryWindow() { return this.isBlocking && this.blockHeld < PARRY_WINDOW; }
@@ -107,7 +108,7 @@ export class Player {
     _v.subVectors(e.center, this.eye).normalize(); if (_v.dot(this.forward) < 0.35) return false;
     this.weapon.onDeflect(true); audio.parry(); this.ctx.game.hitstop(0.06, 0.15);
     this.ctx.effects.sparks(_v2.copy(this.eye).addScaledVector(this.forward, 0.8), this.forward.clone().negate(), INK.ORANGE, 12, 8);
-    this.ctx.game.addScore(40, 'Savuşturuldu'); this.ctx.input.rumble(0.6, 0.6, 100); return true;
+    this.ctx.game.addScore(40, ui("Deflected")); this.ctx.input.rumble(0.6, 0.6, 100); return true;
   }
   die() { this.alive = false; this.deathT = 0; audio.death(); this.detachGrapple(false); this.ctx.game.onPlayerDeath(); }
   idleCam(t) {
@@ -198,7 +199,7 @@ export class Player {
     const bounds = ctx.level.bounds;
     if (b.pos.y < -12 || b.pos.x < bounds.minX - 10 || b.pos.x > bounds.maxX + 10 || b.pos.z < bounds.minZ - 10 || b.pos.z > bounds.maxZ + 10) {
       this.detachGrapple(false); b.pos.copy(ctx.level.playerStart); b.vel.set(0, 0, 0); this.takeDamage(20, null); if (this.onFall) this.onFall();
-      ctx.hud.message('Sayfadan düştün', 'Başlangıç noktasına döndün', 1.8);
+      ctx.hud.message(ui("You fell off the page"), ui("Returned to spawn"), 1.8);
     }
     if (b.onGround && !this.lastGround) {
       const impact = clamp(-b.landVel / 14, 0, 1.5); this.landDip.kick(-impact * 6 - 0.5); audio.land(impact);
@@ -213,7 +214,7 @@ export class Player {
     this.stamPause -= dt;
     if (this.grapple.state !== 'idle') this.grapStam -= STAM_DRAIN * dt; else if (this.stamPause <= 0) this.grapStam += (b.onGround ? STAM_GROUND : STAM_AIR) * dt;
     this.grapStam = clamp(this.grapStam, 0, 1);
-    if (this.grapple.state === 'on' && this.grapStam <= 0) { this.detachGrapple(false); ctx.hud.tip('Grapple tükendi · Yerde daha hızlı dolar', 1.4); }
+    if (this.grapple.state === 'on' && this.grapStam <= 0) { this.detachGrapple(false); ctx.hud.tip(ui("Grapple exhausted · Recovers faster on the ground"), 1.4); }
     const hs2 = Math.hypot(b.vel.x, b.vel.z); const moving = b.onGround && hs2 > 0.6 && !this.sliding;
     this.bobAmt = damp(this.bobAmt, moving ? clamp(hs2 / 7, 0.3, 1.4) : 0, 8, dt);
     if (moving) { this.bobPhase += dt * (7 + hs2 * 0.5); this.stepDist += hs2 * dt; if (this.stepDist > (sprinting ? 2.5 : 2.0)) { this.stepDist = 0; audio.footstep(clamp(hs2 / 8, 0.3, 1)); } }
@@ -392,7 +393,7 @@ export class Player {
     return null;
   }
   _fireGrapple() {
-    if (this.grapStam < STAM_MIN) { audio.winded(); this.ctx.hud.tip('Grapple dinleniyor', 0.9); return; }
+    if (this.grapStam < STAM_MIN) { audio.winded(); this.ctx.hud.tip(ui("Grapple recovering"), 0.9); return; }
     const t = this._findGrappleTarget(); if (!t) { audio.empty(); return; }
     this.grapStam -= STAM_FIRE; this.stamPause = STAM_PAUSE;
     const g = this.grapple; g.state = 'fly'; g.anchor.copy(t.point); this._handPos(g.from); g.hook.copy(g.from); g.flyT = 0; g.flyDur = clamp(t.dist / 110, 0.04, 0.6); g.enemy = t.enemy || null; g.mover = t.mover || null; g.t = 0;
@@ -414,7 +415,7 @@ export class Player {
       g.flyT += dt; const f = Math.min(1, g.flyT / g.flyDur); g.hook.lerpVectors(g.from, g.anchor, f);
       if (f >= 1) {
         if (!ctx.world.hasLineOfSight(this.eye, g.anchor)) { this.detachGrapple(false); return; }
-        if (g.enemy) { if (g.enemy.alive) { ctx.enemies.yank(g.enemy, this.center); ctx.game.addScore(30, 'Yakaladın'); audio.grappleHit(); ctx.input.rumble(0.5, 0.5, 90); } this.detachGrapple(false); }
+        if (g.enemy) { if (g.enemy.alive) { ctx.enemies.yank(g.enemy, this.center); ctx.game.addScore(30, ui("Yanked")); audio.grappleHit(); ctx.input.rumble(0.5, 0.5, 90); } this.detachGrapple(false); }
         else { g.state = 'on'; g.len = Math.max(1.5, this.center.distanceTo(g.anchor) * 0.94); g.blockedT = 0; g.t = 0; g.swingT = 0; audio.grappleHit(); audio.reelLoop(true); ctx.hud.grappleTarget(2); ctx.input.rumble(0.3, 0.6, 60); if (b.onGround) { b.vel.y = Math.max(b.vel.y, 5); b.onGround = false; } }
       }
     } else if (g.state === 'on') {

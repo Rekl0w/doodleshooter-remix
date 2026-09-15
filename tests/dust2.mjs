@@ -18,7 +18,7 @@ try {
    'Pit exit without jumping':[[904,448],[940,448],[945,430],[945,400],[924,376],[900,354]],
    'B doors to CT spawn':[[441,179],[446,161],[470,161],[496,161],[541,161],[585,168],[680,169]],
    'CT rotation underneath short bridge':[[690,170],[735,170]],
-   'CT ground ramp reaches the A platform without jumping':[[811,194],[811,181],[811,164],[811,143]],
+   'CT center is unobstructed after removing the added A ramp':[[785,180],[811,180],[850,180]],
   };
   for(const[name,points]of Object.entries(routes)){
    const [x,z]=points[0],body=makeBody(new T.Vector3((x-640)*.18,Math.round(dustHeight(x,z)/.12)*.12,(z-360)*.18),.35,1.75,.55);body.onGround=true;let failure=null;

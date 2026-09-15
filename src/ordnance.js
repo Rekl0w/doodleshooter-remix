@@ -1,3 +1,4 @@
+import { ui } from './i18n.js';
 import * as THREE from 'three';
 import { makeInkMaterial, INK } from './render.js';
 import { blastDamage } from './combat.js';
@@ -24,17 +25,17 @@ export class Ordnance {
   placeMine() {
     const { player: P, world, hud } = this.ctx;
     if (!P.alive || this.mineCd > 0) return false;
-    if (this.mineStock <= 0 || this.mines.length >= SUPPORT.mineCap) { hud.tip(this.mineStock <= 0 ? 'Mayın bitti · Cephane kutusu veya yeni dalga ile yenilenir' : 'Aynı anda en fazla 4 mayın', 2); return false; }
+    if (this.mineStock <= 0 || this.mines.length >= SUPPORT.mineCap) { hud.tip(this.mineStock <= 0 ? ui("Out of mines · Refill at an ammo box or the next wave") : ui("You can place up to 4 mines"), 2); return false; }
     const probe = P.body.pos.clone().addScaledVector(P.forward, 1.4); probe.y = P.body.pos.y + 1;
     const hit = world.raycast(probe, down, 2.5);
-    if (!hit || hit.normal.y < .8 || !world.hasLineOfSight(P.eye, hit.point.clone().addScaledVector(up, .15))) { hud.tip('Mayın için yakınındaki açık zemini seç', 1.5); return false; }
+    if (!hit || hit.normal.y < .8 || !world.hasLineOfSight(P.eye, hit.point.clone().addScaledVector(up, .15))) { hud.tip(ui("Choose clear ground nearby for a mine"), 1.5); return false; }
     const pos = hit.point.clone().addScaledVector(up, .13);
-    if (this.mines.some(m => m.pos.distanceTo(pos) < 1)) { hud.tip('Mayınları biraz aralıklı yerleştir', 1.5); return false; }
+    if (this.mines.some(m => m.pos.distanceTo(pos) < 1)) { hud.tip(ui("Leave more space between mines"), 1.5); return false; }
     const mesh = mineModel(); mesh.position.copy(pos); this.ctx.scene.add(mesh);
     const id = `mine:${++this.serial}`;
     this.mines.push({ pos, mesh, arm: SUPPORT.mineArm, life: 90, id });
     this.emit({ op: 'place', pos: pos.toArray(), id });
-    this.mineStock--; this.mineCd = .6; audio.shell(); hud.tip('Mayın kuruldu · 1 saniye sonra hazır', 1); return true;
+    this.mineStock--; this.mineCd = .6; audio.shell(); hud.tip(ui("Mine placed · Arms in 1 second"), 1); return true;
   }
   targets() {
     const ctx = this.ctx;

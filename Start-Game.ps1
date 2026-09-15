@@ -19,13 +19,9 @@ if (-not (Test-GameServer $address)) {
     }
     if (-not $available) { throw 'No free local port found.' }
     $address = "http://127.0.0.1:$Port"
-    $bundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-    if (Test-Path -LiteralPath $bundledPython) { $pythonPath = $bundledPython }
-    else {
-        $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $pythonCommand) { throw 'Python 3 is required. Install Python, then run OYNA.cmd again.' }
-        $pythonPath = $pythonCommand.Source
-    }
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) { throw 'Python 3 is required. Install Python, then run OYNA.cmd again.' }
+    $pythonPath = $pythonCommand.Source
     $script = Join-Path $PSScriptRoot 'serve.py'
     $server = Start-Process -FilePath $pythonPath -ArgumentList @(('"' + $script + '"'), "$Port") -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru
     $ready = $false

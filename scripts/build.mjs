@@ -10,5 +10,5 @@ await mkdir(output, { recursive: true });
 for (const file of ['index.html', 'style.css', '_headers', 'src', 'vendor']) {
   await cp(join(root, file), join(output, file), { recursive: true });
 }
-await writeFile(join(output, '404.html'), '<!doctype html><html lang="tr"><meta charset="utf-8"><title>Sayfa bulunamadı</title><h1>Sayfa bulunamadı</h1><a href="/">Oyuna dön</a></html>');
+await writeFile(join(output, '404.html'), '<!doctype html><html lang="en"><meta charset="utf-8"><title>Page not found</title><h1>Page not found</h1><a href="/">Back to the game</a></html>');
 console.log('Static game ready in dist/');

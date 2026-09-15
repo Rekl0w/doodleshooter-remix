@@ -155,6 +155,23 @@ canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; display: bloc
 .mapbtn i { font-size: 13px; line-height: 1.35; opacity: .85; }
 .mapbtn small { font-size: 11px; letter-spacing: 1px; margin-top: auto; }
 .mapbtn:focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
+.appearance { width: 100%; min-width: 0; box-sizing: border-box; margin: 18px 0 8px; padding: 12px; border: 2px solid var(--ink); border-radius: 9px; }
+.appearance legend { padding: 0 8px; font-size: 20px; }
+.appearance-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.appearance label { position: relative; cursor: pointer; min-width: 0; }
+.appearance input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.appearance-card { display: flex; flex-direction: column; align-items: center; gap: 5px; height: 100%; box-sizing: border-box; border: 2px solid transparent; border-radius: 6px; padding: 8px; }
+.appearance input:checked + .appearance-card { border-color: var(--ink); background: rgba(26,48,192,.06); }
+.appearance input:focus-visible + .appearance-card { outline: 3px solid var(--red); outline-offset: 2px; }
+.appearance strong { font-size: 21px; }
+.appearance small, .appearance p { font-size: 15px; line-height: 1.3; }
+.appearance p { margin: 10px 0 0; opacity: .75; }
+.appearance-swatch { width: 100%; height: 48px; border: 1px solid rgba(26,48,192,.2); border-radius: 4px; }
+.appearance-swatch.notebook { background: repeating-linear-gradient(0deg, transparent 0 11px, #bbd0e7 12px 13px), linear-gradient(90deg, #faf8ee 0 12%, #e49b9b 12% 13%, #faf8ee 13%); }
+.appearance-swatch.solid { background: linear-gradient(155deg, #8bb5d1 0 48%, #bdb293 49% 72%, #81976f 73%); }
+.play-map { font: inherit; font-size: 24px; padding: 8px 22px; margin: 4px 0 12px; color: var(--paper); background: var(--ink); border: 2px solid var(--ink); border-radius: 8px; cursor: pointer; }
+.play-map:hover { filter: brightness(1.15); }
+.play-map:focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
 .map-sketch { width: 48px; height: 48px; color: currentColor; }
 .map-sketch rect { fill: currentColor; fill-opacity: .23; stroke: currentColor; stroke-width: 1.7; }
 .map-sketch .map-edge { fill: none; stroke-dasharray: 4 3; opacity: .65; }
@@ -206,11 +223,15 @@ canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; display: bloc
 .online .sub { font-size: 19px; opacity: .75; }
 .online .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
 .online .row.split { gap: 26px; }
-.online button { font: inherit; font-size: 22px; color: var(--paper); background: var(--ink); border: 2.5px solid var(--ink); border-radius: 7px 10px 6px 9px / 10px 6px 9px 7px; padding: 6px 18px; cursor: pointer; }
+.online button:not(.mapbtn) { font: inherit; font-size: 22px; color: var(--paper); background: var(--ink); border: 2.5px solid var(--ink); border-radius: 7px 10px 6px 9px / 10px 6px 9px 7px; padding: 6px 18px; cursor: pointer; }
 .online button.alt { color: var(--ink); background: transparent; }
 .online button.big { font-size: 26px; padding: 8px 26px; transform: rotate(-.6deg); }
-.online button:disabled { opacity: .4; cursor: default; }
-.online button:hover:not(:disabled) { filter: brightness(1.15); }
+.online button:not(.mapbtn):disabled { opacity: .4; cursor: default; }
+.online button:not(.mapbtn):hover:not(:disabled) { filter: brightness(1.15); }
+.mapbtn:disabled { cursor: default; }
+.language-picker { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-bottom: 8px; font-size: 17px; }
+.language-picker select { font: inherit; color: var(--ink); background: var(--paper); border: 2px solid var(--ink); border-radius: 6px; padding: 4px 8px; }
+.language-picker select:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
 .online input[type=text] { font: inherit; font-size: 26px; width: 150px; text-align: center; letter-spacing: 5px; text-transform: uppercase; color: var(--ink); border: 2.5px solid var(--ink); border-radius: 6px 9px 6px 8px; background: transparent; padding: 3px 6px; }
 .online input.namebox { letter-spacing: 0; text-transform: none; font-size: 22px; width: 180px; }
 .online .radio { display: flex; gap: 14px; font-size: 19px; }
@@ -220,7 +241,18 @@ canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; display: bloc
 .online .code { font-size: 52px; letter-spacing: 10px; }
 .online .plist { min-width: 340px; }
 .online .plist .host span:first-child::after { content: ' · host'; opacity: .6; font-size: 16px; }
+html[lang="tr"] .online .plist .host span:first-child::after { content: ' · oda sahibi'; }
+.online .plist .host::after { content: none; }
 .online .plist .me { background: rgba(26,48,192,.08); }
+@media (max-width: 600px) {
+  .panel { padding: 18px 12px; }
+  .panel h2 { font-size: 21px; }
+  .settings label { flex-wrap: wrap; justify-content: center; max-width: 100%; }
+  .settings input[type=range] { width: min(180px, 55vw); }
+  .online .plist, .scoreboard { min-width: 0; width: 100%; }
+  .online .code { font-size: 34px; letter-spacing: 5px; }
+  .mapbtn strong { overflow-wrap: anywhere; }
+}
 .board { position: absolute; left: 50%; top: 18%; transform: translateX(-50%) rotate(-.5deg); background: rgba(250,247,238,.94); border: 3px solid var(--ink); border-radius: 12px 16px 10px 14px / 14px 10px 16px 12px; padding: 12px 22px; min-width: 380px; font-size: 24px; color: var(--ink); z-index: 5; }
 .board h3 { margin: 0 0 6px; font-size: 30px; text-align: center; letter-spacing: 2px; }
 .board div { display: flex; justify-content: space-between; gap: 24px; padding: 2px 8px; border-bottom: 1.5px solid rgba(26,48,192,.25); }

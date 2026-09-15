@@ -1,0 +1,95 @@
+import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright');
+const browser = await chromium.launch({ headless: true, channel: process.platform === 'win32' ? 'msedge' : undefined, args: ['--enable-unsafe-swiftshader', '--disable-background-timer-throttling'] });
+const errors = [], pages = [];
+let count = 0;
+const check = (name, value) => { assert.ok(value, name); console.log('PASS ' + name); count++; };
+const url = process.env.GAME_URL || 'http://127.0.0.1:8911';
+const open = async (locale) => {
+  const page = await browser.newPage({ locale, viewport: { width: 1440, height: 1000 } });
+  pages.push(page); page.on('pageerror', e => errors.push(e.message));
+  await page.goto(url); await page.waitForFunction(() => !!window.__game);
+  return page;
+};
+const ready = page => page.waitForFunction(() => !!window.__game);
+const cardStyle = (page, selector) => page.locator(selector).evaluate(el => {
+  const s = getComputedStyle(el);
+  return { background: s.backgroundColor, color: s.color, padding: s.padding, font: s.fontSize, opacity: s.opacity, filter: s.filter };
+});
+try {
+  const host = await open('tr-TR');
+  check('page identity and main menu render', (await host.title()).includes('Doodle District') && await host.locator('#soloBtn').isVisible());
+  check('fresh Turkish browser still defaults to English', await host.locator('html').getAttribute('lang') === 'en' && (await host.locator('#soloBtn').innerText()).startsWith('PLAY'));
+  check('controls and maps are English', (await host.locator('.controls summary').innerText()).startsWith('Controls') && (await host.locator('[data-map="forest"] strong').innerText()) === 'Pine Valley');
+  await host.locator('[data-map="dust2"]').click();
+  await host.locator('#setLanguage').selectOption('tr'); await host.waitForFunction(() => document.documentElement.lang === 'tr' && !!window.__game);
+  check('Turkish selection translates menu and map labels', (await host.locator('#soloBtn').innerText()).startsWith('OYNA') && (await host.locator('[data-map="forest"] strong').innerText()) === 'Çamlık Vadi');
+  check('language switch preserves chosen map', await host.locator('[data-map="dust2"]').getAttribute('aria-pressed') === 'true');
+  await host.reload(); await ready(host);
+  check('Turkish choice persists after reload', await host.locator('#setLanguage').inputValue() === 'tr');
+  await host.locator('#soloBtn').click();
+  check('Turkish HUD and weapons render', await host.locator('#weapon').innerText() === 'Tüfek' && (await host.locator('.health').innerText()).includes('Can'));
+  await host.keyboard.press('Escape'); await host.locator('#menuBtn').click();
+  await host.locator('#setLanguage').selectOption('en'); await host.waitForFunction(() => document.documentElement.lang === 'en' && !!window.__game);
+  await host.locator('[data-map="forest"]').click(); await host.mouse.move(0, 0);
+  const selectedStyle = await cardStyle(host, '[data-map="forest"]');
+  const normalStyle = await cardStyle(host, '[data-map="dust2"]');
+  await host.locator('#onlineBtn').click();
+  await host.locator('#setName').fill('Can');
+  await host.locator('input[value="private"]').check(); await host.locator('#createBtn').click();
+  await host.waitForFunction(() => __game.game.state === 'lobby', null, { timeout: 20000 });
+  await host.mouse.move(0, 0);
+  check('online unselected card matches main-menu appearance', JSON.stringify(await cardStyle(host, '[data-map="dust2"]')) === JSON.stringify(normalStyle));
+  check('online selected card matches main-menu appearance', JSON.stringify(await cardStyle(host, '[data-map="forest"]')) === JSON.stringify(selectedStyle));
+  check('only one online card is selected', await host.locator('.mapbtn.on').count() === 1);
+  const room = await host.evaluate(() => __game.net.code);
+  const guest = await open('en-US');
+  await guest.locator('#setLanguage').selectOption('tr'); await guest.waitForFunction(() => document.documentElement.lang === 'tr' && !!window.__game);
+  await guest.locator('#onlineBtn').click(); await guest.locator('#setName').fill('Oyuncu');
+  await guest.locator('#codeBox').fill(room); await guest.locator('#joinBtn').click();
+  await guest.waitForFunction(() => __game.game.state === 'lobby' && __game.lobby.players.size === 2, null, { timeout: 20000 });
+  check('English host and Turkish guest share a lobby', (await host.locator('#panel h1').innerText()) === 'Lobby' && (await guest.locator('#panel h1').innerText()) === 'Oda');
+  check('player names remain untranslated on both clients', (await host.locator('.plist').innerText()).includes('Oyuncu') && (await guest.locator('.plist').innerText()).includes('Can'));
+  check('guest has no start button and sees Turkish waiting notice', await guest.locator('#startBtn').count() === 0 && (await guest.locator('#hostWait').innerText()).includes('bekleniyor'));
+  check('guest map cards remain readable and disabled', await guest.locator('.mapbtn:disabled').count() === 11 && (await cardStyle(guest, '[data-map="forest"]')).opacity === selectedStyle.opacity);
+  await guest.evaluate(() => {
+    const n = __game.net;
+    __game.hostStart();
+    n.send('startreq', {});
+    n.broadcast('start', { map: 'dust2' });
+    n.conns.get(n.hostId).send({ t: 'start', d: { map: 'dust2' }, to: n.hostId, from: n.hostId });
+  });
+  await host.waitForTimeout(600);
+  check('guest function, request and spoofed packet cannot start match', await host.evaluate(() => __game.game.state === 'lobby') && await guest.evaluate(() => __game.game.state === 'lobby'));
+  await host.locator('[data-map="dust2"]').click();
+  await guest.waitForFunction(() => __game.lobby.map === 'dust2');
+  check('host selection updates the guest selected card', await guest.locator('[data-map="dust2"]').getAttribute('aria-pressed') === 'true');
+  await host.locator('[name="appearance"][value="notebook"]').check();
+  await guest.locator('[name="appearance"][value="solid"]').check();
+  check('guest can choose a personal style while map choice stays locked', await guest.locator('.mapbtn:disabled').count() === 11 && await guest.locator('[name="appearance"][value="solid"]').isChecked());
+  if (process.env.QA_OUTPUT) {
+    await host.screenshot({ path: resolve(process.env.QA_OUTPUT, 'online-maps-english.png') });
+    await guest.screenshot({ path: resolve(process.env.QA_OUTPUT, 'online-lobby-turkish.png') });
+  }
+  await host.locator('#startBtn').click();
+  await guest.waitForFunction(() => __game.game.state === 'play' && __game.level.key === 'dust2');
+  check('host start enters chosen map on both clients', await host.evaluate(() => __game.game.state === 'play' && __game.level.key === 'dust2'));
+  check('different visual styles work in the same online match', await host.evaluate(() => __game.ctx.renderer.post.uniforms.uSolid.value === 0) && await guest.evaluate(() => __game.ctx.renderer.post.uniforms.uSolid.value === 1));
+  const collision = page => page.evaluate(() => JSON.stringify(__game.world.boxes.map(b => [b.min, b.max])));
+  check('different online styles preserve identical collisions', await collision(host) === await collision(guest));
+  check('HUD uses each client language', await host.locator('#weapon').innerText() === 'Rifle' && await guest.locator('#weapon').innerText() === 'Tüfek');
+  await host.evaluate(() => __game.net.send('feed', { event: 'fell', name: 'Can' }));
+  await guest.waitForFunction(() => document.querySelector('#killfeed').textContent.includes('Can Sayfadan düştü'));
+  check('network feed is localized without translating player names', true);
+  for (const p of [host, guest]) await p.evaluate(() => __game.net.leave());
+  await host.reload(); await ready(host); await host.setViewportSize({ width: 390, height: 844 });
+  check('mobile menu has no horizontal overflow', await host.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('#panel').scrollWidth <= document.querySelector('#panel').clientWidth));
+  if (process.env.QA_OUTPUT) await host.screenshot({ path: resolve(process.env.QA_OUTPUT, 'menu-mobile-english.png') });
+  check('no browser runtime errors', errors.length === 0);
+  console.log(`${count} UI, language and host-authority checks passed.`);
+} finally {
+  for (const p of pages) await p.evaluate(() => window.__game?.net.leave()).catch(() => {});
+  await browser.close();
+}

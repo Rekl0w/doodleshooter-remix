@@ -13,7 +13,7 @@ function check(name, result) { assert.ok(result, name); assertions++; console.lo
 try {
   await page.goto(process.env.GAME_URL || 'http://127.0.0.1:8911');
   await page.waitForFunction(() => !!window.__game);
-  check('Turkish menu renders', (await page.locator('#soloBtn').innerText()).includes('OYNA'));
+  check('English default menu renders', (await page.locator('#soloBtn').innerText()).includes('PLAY'));
   await page.locator('.controls summary').click();
   check('opening controls does not start the game', await page.evaluate(() => __game.game.state === 'start' && document.querySelector('.controls').open));
   check('expanded menu stays inside viewport', await page.evaluate(() => { const r = document.querySelector('.panel').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }));

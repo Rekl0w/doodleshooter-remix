@@ -61,9 +61,13 @@ try {
    p.yaw=Math.atan2(-d.x,-d.z);p.pitch=Math.asin(d.y);g.input.mx=g.input.my=0;return target.toArray();
  },x);
  await aimAnchor(30);await page.waitForTimeout(60);await page.keyboard.down('q');
- await page.waitForFunction(()=>__game.player.grapple.state==='on');await page.waitForTimeout(1400);
+ await page.waitForFunction(()=>__game.player.grapple.state==='on');
+ // Switch while still ascending beside the facade. Waiting a fixed 1.4 s can
+ // carry the player behind the roof lip, which correctly blocks the next rope.
+ await page.waitForFunction(()=>__game.player.body.pos.y>12);
  check('city: Q pulls the player from the street up the skyscraper',await page.evaluate(()=>__game.player.body.pos.y>12));
- await shot('sehir-iple-ucus');await page.keyboard.up('q');await page.waitForTimeout(160);
+ await shot('sehir-iple-ucus');await page.keyboard.up('q');
+ await page.waitForFunction(()=>__game.player.grapple.state==='idle'&&__game.player.grapple.cd<=0);
  await aimAnchor(0);await page.waitForTimeout(40);await page.keyboard.down('q');
  await page.waitForFunction(()=>__game.player.grapple.state==='on');
  check('city: a second building can be hooked while airborne',await page.evaluate(()=>!__game.player.body.onGround&&__game.player.grapple.anchor.x===0));

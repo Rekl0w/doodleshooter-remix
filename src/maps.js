@@ -1,18 +1,19 @@
+import { ui } from './i18n.js';
 import * as THREE from 'three';
 import { INK } from './render.js';
 import { buildWilderness, buildDust, buildSkyline } from './expansion-maps.js';
 
 export const NEW_MAPS = [
-  { key: 'harbor', name: 'Konteyner Limanı', blurb: 'Dar koridorlar · Vinçler · Yakın çatışma', style: 'harbor' },
-  { key: 'canyon', name: 'Kâğıt Kanyonu', blurb: 'Açık alan · Teraslar · Uzun menzil', style: 'canyon' },
-  { key: 'gardens', name: 'Çatı Bahçeleri', blurb: 'Yüksek köprüler · Parklar · Grapple', style: 'gardens' },
-  { key: 'forest', name: 'Çamlık Vadi', blurb: 'Sade orman · Geniş açıklık · VS', style: 'forest' },
-  { key: 'duel', name: 'Orman Düellosu', blurb: 'Küçük arena · Simetrik siperler · VS', style: 'duel' },
-  { key: 'meadow', name: 'Göl Kenarı', blurb: 'Çayır · İskeleler · Açık VS alanı', style: 'meadow' },
-  { key: 'deepforest', name: 'Sık Orman', blurb: '288 × 288 · Sık ağaçlar · Kulübeler', style: 'forest' },
-  { key: 'lostwoods', name: 'Kayıp Orman', blurb: '352 × 352 · Harabeler · Saklan ve avla', style: 'forest' },
-  { key: 'dust2', name: 'Dust 2 · Remix', blurb: 'CS2 planı · Long / Short · Mid · B tünelleri', style: 'canyon' },
-  { key: 'skyline', name: 'Gökdelen Şehri', blurb: '24 yüksek bina · Çatı köprüleri · İple uç', style: 'gardens' },
+  { key: 'harbor', name: ui("Container Harbor"), blurb: ui("Tight lanes · Cranes · Close combat"), style: 'harbor' },
+  { key: 'canyon', name: ui("Paper Canyon"), blurb: ui("Open ground · Terraces · Long range"), style: 'canyon' },
+  { key: 'gardens', name: ui("Rooftop Gardens"), blurb: ui("High bridges · Parks · Grappling"), style: 'gardens' },
+  { key: 'forest', name: ui("Pine Valley"), blurb: ui("Woodland · Wide clearing · VS"), style: 'forest' },
+  { key: 'duel', name: ui("Forest Duel"), blurb: ui("Small arena · Symmetric cover · VS"), style: 'duel' },
+  { key: 'meadow', name: ui("Lakeside"), blurb: ui("Meadow · Piers · Open VS arena"), style: 'meadow' },
+  { key: 'deepforest', name: ui("Deep Forest"), blurb: ui("288 × 288 · Dense trees · Cabins"), style: 'forest' },
+  { key: 'lostwoods', name: ui("Lost Woods"), blurb: ui("352 × 352 · Ruins · Hide and hunt"), style: 'forest' },
+  { key: 'dust2', name: 'Dust 2 · Remix', blurb: ui("CS2 layout · Long / Short · Mid · B tunnels"), style: 'canyon' },
+  { key: 'skyline', name: ui("Skyline City"), blurb: ui("24 towers · Rooftop bridges · Swing through the sky"), style: 'gardens' },
 ];
 
 function perimeter(B, key, ink, size = 52) {

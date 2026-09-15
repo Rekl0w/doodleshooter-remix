@@ -15,12 +15,10 @@ export const DUST_ISLANDS = [
 const S=.18, X=x=>(x-640)*S, Z=z=>(z-360)*S;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function inside(x,z,poly) { let hit=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++) {const a=poly[i],b=poly[j];if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])hit=!hit;}return hit; }
-const onARamp=(x,z)=>x>=794&&x<830&&z>=150&&z<192;
-const region=(x,z)=>!inside(x,z,DUST_OUTLINE)?2:DUST_ISLANDS.some(p=>inside(x,z,p))?1:onARamp(x,z)?3:0;
+const region=(x,z)=>!inside(x,z,DUST_OUTLINE)?2:DUST_ISLANDS.some(p=>inside(x,z,p))?1:0;
 export function dustHeight(x,z) {
   // CT can rotate under short; its bridge is built separately above the ground.
   if(x>=715&&x<=759&&z>=108&&z<=190) return 0;
-  if(onARamp(x,z)) return 3.6*(192-z)/42;
   if(x>=715&&z<151) return 3.6;
   if(x>=876&&z>=151&&z<230) return 3.6*clamp((224-z)/73,0,1);
   if(x>=713&&x<759&&z>=190&&z<=298) return 1.8+1.8*clamp((286-z)/40,0,1);
@@ -63,7 +61,7 @@ export function buildDust(B,H) {
   for(let z=0;z<720;z+=cell) {
     const next=new Map();
     for(let x=300;x<984;) {
-      const type=region(x+1,z+1),open=type===0||type===3,h=open?Math.round(dustHeight(x+1,z+1)/.12)*.12:9;
+      const type=region(x+1,z+1),open=type===0,h=open?Math.round(dustHeight(x+1,z+1)/.12)*.12:9;
       let end=x+cell;
       while(end<984&&region(end+1,z+1)===type&&(!open||Math.round(dustHeight(end+1,z+1)/.12)*.12===h))end+=cell;
       const k=`${x}:${end}:${h}:${type}`;const prev=active.get(k);
@@ -94,12 +92,6 @@ export function buildDust(B,H) {
   // Raised catwalk edge and short bridge over CT spawn.
   wallZ(310,400,633,2.1,[],stone);
   surface(715,108,759,190,3.6,stone);
-  // CT ramp meets A's south edge at full height; the old freestanding stairs
-  // ended in the middle of CT with no landing. A continuous surface covers the
-  // small collision steps, using the same ground color as the site.
-  const rampShape=new THREE.Shape([new THREE.Vector2(Z(150),-3),new THREE.Vector2(Z(192),-3),new THREE.Vector2(Z(192),0),new THREE.Vector2(Z(150),3.6)]);
-  const rampGeo=new THREE.ExtrudeGeometry(rampShape,{depth:36*S,bevelEnabled:false});
-  rampGeo.rotateY(-Math.PI/2);rampGeo.translate(X(830),.025,0);B.addGeo(rampGeo,INK.PINK);
   // Separate lower tunnels from B and upper tunnels. Open ceiling slots admit light.
   box(402,6.7,323,150,.5,62,sand);box(358,6.7,260,29,.5,70,sand);
   box(539,4.6,289,111,.35,37,sand);

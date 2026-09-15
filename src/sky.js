@@ -1,3 +1,4 @@
+import { ui } from './i18n.js';
 import * as THREE from 'three';
 import { makeInkMaterial, INK } from './render.js';
 
@@ -23,7 +24,7 @@ export function addSkyAnimals(B) {
     part(new THREE.ConeGeometry(.28, .55, 3), 0, .08, .93, mat).rotation.x = Math.PI / 2;
     const ring = part(new THREE.TorusGeometry(.48, .065, 6, 16), 0, -.6, 0, orange); ring.rotation.x = Math.PI / 2;
     scene.add(root); L.meshes.push(root);
-    const mover = { id: 'bird-' + i, name: duck ? 'Ördek' : 'Kırlangıç', mesh: root, radius: 1.5, velocity: new THREE.Vector3() };
+    const mover = { id: 'bird-' + i, name: duck ? ui("Duck") : ui("Swallow"), mesh: root, radius: 1.5, velocity: new THREE.Vector3() };
     L.grappleMovers.push(mover);
     const next = new THREE.Vector3();
     const update = t => {

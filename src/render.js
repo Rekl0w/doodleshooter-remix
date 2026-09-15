@@ -89,6 +89,7 @@ uniform float uFlash;
 uniform float uSlow;
 uniform float uLineSpacing;
 uniform float uDesert;
+uniform float uSolid;
 uniform float uLowHp;
 uniform vec3 uPaper;
 uniform vec3 uInks[6];
@@ -118,6 +119,7 @@ void main() {
   float sc = uRes.y / 900.0;
   vec2 nuv = vUv * vec2(uAspect, 1.0);
   vec2 wob = vec2(vnoise(nuv * 6.0 + 11.3), vnoise(nuv * 6.0 + 37.0)) - 0.5;
+  wob *= 1.0 - uSolid;
   vec2 suv = vUv + wob * 2.0 * sc * px;
   vec4 s = texture2D(tScene, suv);
   float z = texture2D(tDepth, suv).x;
@@ -154,7 +156,7 @@ void main() {
   // constant instead of collapsing into moire on far geometry.
   float shade = s.r;
   float hatch = 0.0;
-  if (!sky) {
+  if (!sky && uSolid < 0.5) {
     if (shade < 0.0) hatch = 1.0;
     else {
       vec2 hp; float sp, w;
@@ -209,16 +211,25 @@ void main() {
   float ew = 0.75 + 0.35 * vnoise(pp * 0.35);
   col = mix(col, inkColor(inkId) * 0.92, clamp(edge * ew, 0.0, 1.0) * fadeE);
 
-  // Dust II uses warm plaster/stone surfaces and sky, preserving readable silhouettes.
-  if (uDesert > 0.5) {
+  // Solid mode removes ruled paper and crosshatching on every map. Dust keeps
+  // its warm palette; the other maps use softer stone, timber and foliage.
+  if (uSolid > 0.5) {
     vec3 base = vec3(0.72, 0.76, 0.77);
     if (s.g > 0.5 && s.g < 1.5) base = vec3(0.76, 0.16, 0.10);
     else if (s.g > 1.5 && s.g < 2.5) base = vec3(0.30, 0.22, 0.15);
     else if (s.g > 2.5 && s.g < 3.5) base = vec3(0.83, 0.71, 0.53);
     else if (s.g > 3.5 && s.g < 4.5) base = vec3(0.42, 0.44, 0.28);
     else if (s.g > 4.5) base = vec3(0.65, 0.58, 0.46);
+    if (uDesert < 0.5) {
+      base = vec3(0.68, 0.73, 0.76);
+      if (s.g > 0.5 && s.g < 1.5) base = vec3(0.82, 0.22, 0.17);
+      else if (s.g > 1.5 && s.g < 2.5) base = vec3(0.34, 0.27, 0.21);
+      else if (s.g > 2.5 && s.g < 3.5) base = vec3(0.80, 0.66, 0.43);
+      else if (s.g > 3.5 && s.g < 4.5) base = vec3(0.34, 0.55, 0.32);
+      else if (s.g > 4.5) base = vec3(0.66, 0.68, 0.57);
+    }
     float light = shade < 0.0 ? 0.6 : 0.55 + 0.45 * shade;
-    col = base * light * (0.98 + 0.035 * grain);
+    col = base * light;
     col *= 1.0 - edge * 0.21 * fadeE;
     col = mix(col, vec3(0.82, 0.83, 0.79), smoothstep(65.0, 240.0, d) * 0.28);
     if (sky) col = mix(vec3(0.78, 0.85, 0.88), vec3(0.40, 0.65, 0.83), smoothstep(0.0, 1.0, vUv.y));
@@ -250,7 +261,7 @@ export class InkRenderer {
       uniforms: {
         tScene: { value: this.rt.texture }, tDepth: { value: depthTexture }, uRes: { value: new THREE.Vector2(2, 2) }, uAspect: { value: 1 },
         uTime: { value: 0 }, uNear: { value: this.camera.near }, uFar: { value: this.camera.far }, uHurt: { value: 0 }, uFlash: { value: 0 }, uSlow: { value: 0 },
-        uDesert: { value: 0 }, uLowHp: { value: 0 }, uLineSpacing: { value: 60 }, uPaper: { value: new THREE.Vector3(0.965, 0.955, 0.905) }, uInks: { value: INK_COLORS },
+        uDesert: { value: 0 }, uSolid: { value: 0 }, uLowHp: { value: 0 }, uLineSpacing: { value: 60 }, uPaper: { value: new THREE.Vector3(0.965, 0.955, 0.905) }, uInks: { value: INK_COLORS },
         uInvProj: { value: new THREE.Matrix4() }, uInvView: { value: new THREE.Matrix4() },
       },
       vertexShader: postVert, fragmentShader: postFrag, depthTest: false, depthWrite: false,
@@ -270,6 +281,7 @@ export class InkRenderer {
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
     const u = this.post.uniforms; u.uRes.value.set(rw, rh); u.uAspect.value = w / h; u.uLineSpacing.value = rh / 13.5;
   }
+  setAppearance(mode) { this.post.uniforms.uSolid.value = mode === 'solid' ? 1 : 0; }
   render(time, fx = {}) {
     shared.uTime.value = time;
     this.camera.updateMatrixWorld(); this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();

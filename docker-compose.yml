@@ -1,8 +1,0 @@
-services:
-  doodleshooter:
-    build: .
-    image: doodleshooter:latest
-    container_name: doodleshooter
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8901:80"

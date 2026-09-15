@@ -1,3 +1,4 @@
+import { ui } from './i18n.js';
 // First-person view models + firing logic: rifle, shotgun, revolver (hitscan) and katana.
 import * as THREE from 'three';
 import { makeInkMaterial, INK } from './render.js';
@@ -64,24 +65,24 @@ export class ViewModel {
 }
 
 const GUNS = {
-  rifle: { name: 'Tüfek', hint: 'Otomatik · Sağ tık ile nişan al', kind: 'rifle', magSize: 35, reserve: 175, maxReserve: 350, interval: 1 / 11, damage: 24, headMul: 2.6, pellets: 1, spread: 0.016, adsSpread: 0.0034, spreadKick: 0.009, spreadMax: 0.075, adsFov: 58, sight: [0, 0.12, -0.05, 0.3], camKick: [0.009, 0.0034], modelKick: [0.25, 0.3, 2.4, -3.2, 0.9, 1.2], fovKick: 1.2, reloadDur: 1.45, reloadType: 'mag', auto: true, falloff: null, tracer: 0.02, flashScale: 1, sound: 'shot', shell: [0.02, INK.ORANGE], moveSpread: 0.0012, pvp: [19, 1.8, null] },
-  shotgun: { name: 'Pompalı', hint: 'Yakından güçlü · Doldurmayı ateş ederek kes', kind: 'shotgun', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.78, damage: 19, headMul: 1.8, pellets: 10, spread: 0.062, adsSpread: 0.034, spreadKick: 0, spreadMax: 0.1, adsFov: 68, sight: [0, 0.095, -1.0, 0.52], camKick: [0.05, 0.012], modelKick: [0.4, 0.6, 5, -9, 2, 3], fovKick: 4, reloadDur: 0.45, reloadType: 'shells', auto: false, falloff: [11, 32, 0.22], tracer: 0.014, flashScale: 1.9, sound: 'shotgunFire', shell: [0.035, INK.RED], moveSpread: 0.0006, cycleDur: 0.45, pvp: [16, 1.6, [9, 26, 0.15]] },
-  sniper: { name: 'Keskin nişancı', hint: 'Uzun menzil · Sağ tık ile dürbün', kind: 'sniper', scope: true, magSize: 5, reserve: 25, maxReserve: 50, interval: 0.2, damage: 150, headMul: 3, pellets: 1, spread: 0.075, adsSpread: 0.0004, spreadKick: 0.05, spreadMax: 0.14, adsFov: 20, sight: [0, 0.135, 0, 0.42], camKick: [0.055, 0.008], modelKick: [0.25, 0.8, 4.5, -11, 1.2, 2], fovKick: 4.5, reloadDur: 2.1, reloadType: 'mag', auto: false, falloff: null, tracer: 0.03, flashScale: 1.7, sound: 'sniperFire', shell: [0.03, INK.ORANGE], moveSpread: 0.004, cycleDur: 0.85, pvp: [150, 1.5, null] },
-  revolver: { name: 'Revolver', hint: 'Solo: sınırsız yedek · 6 atış, sonra R ile doldur', kind: 'revolver', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.4, damage: 42, headMul: 2.4, pellets: 1, spread: 0.006, adsSpread: 0.002, spreadKick: 0.02, spreadMax: 0.06, adsFov: 52, sight: [0, 0.08, -0.34, 0.42], camKick: [0.038, 0.007], modelKick: [0.3, 0.9, 3.2, -10, 1.5, 2.5], fovKick: 2.5, reloadDur: 1.6, reloadType: 'cylinder', auto: false, falloff: null, tracer: 0.026, flashScale: 1.35, sound: 'revolver', shell: null, moveSpread: 0.0015, pvp: [42, 2.4, [9, 34, 0.42]] },
-  smg: { name: 'SMG', hint: 'Hızlı atış · Hareket halinde yakın çatışma', kind: 'smg', magSize: 28, reserve: 168, maxReserve: 336, interval: 1 / 16, damage: 16, headMul: 2, pellets: 1, spread: 0.022, adsSpread: 0.007, spreadKick: 0.005, spreadMax: 0.065, adsFov: 64, sight: [0, 0.09, -0.1, 0.32], camKick: [0.006, 0.004], modelKick: [0.2, 0.2, 1.7, -2, 1, 1.5], fovKick: 0.7, reloadDur: 1.15, reloadType: 'mag', auto: true, falloff: [12, 38, 0.35], tracer: 0.016, flashScale: 0.8, sound: 'shot', shell: [0.018, INK.ORANGE], moveSpread: 0.0005, pvp: [13, 1.7, [10, 30, 0.3]] },
+  rifle: { name: ui("Rifle"), hint: ui("Automatic · RMB to aim"), kind: 'rifle', magSize: 35, reserve: 175, maxReserve: 350, interval: 1 / 11, damage: 24, headMul: 2.6, pellets: 1, spread: 0.016, adsSpread: 0.0034, spreadKick: 0.009, spreadMax: 0.075, adsFov: 58, sight: [0, 0.12, -0.05, 0.3], camKick: [0.009, 0.0034], modelKick: [0.25, 0.3, 2.4, -3.2, 0.9, 1.2], fovKick: 1.2, reloadDur: 1.45, reloadType: 'mag', auto: true, falloff: null, tracer: 0.02, flashScale: 1, sound: 'shot', shell: [0.02, INK.ORANGE], moveSpread: 0.0012, pvp: [19, 1.8, null] },
+  shotgun: { name: ui("Shotgun"), hint: ui("Powerful up close · Fire to interrupt reload"), kind: 'shotgun', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.78, damage: 19, headMul: 1.8, pellets: 10, spread: 0.062, adsSpread: 0.034, spreadKick: 0, spreadMax: 0.1, adsFov: 68, sight: [0, 0.095, -1.0, 0.52], camKick: [0.05, 0.012], modelKick: [0.4, 0.6, 5, -9, 2, 3], fovKick: 4, reloadDur: 0.45, reloadType: 'shells', auto: false, falloff: [11, 32, 0.22], tracer: 0.014, flashScale: 1.9, sound: 'shotgunFire', shell: [0.035, INK.RED], moveSpread: 0.0006, cycleDur: 0.45, pvp: [16, 1.6, [9, 26, 0.15]] },
+  sniper: { name: ui("Sniper"), hint: ui("Long range · RMB to scope"), kind: 'sniper', scope: true, magSize: 5, reserve: 25, maxReserve: 50, interval: 0.2, damage: 150, headMul: 3, pellets: 1, spread: 0.075, adsSpread: 0.0004, spreadKick: 0.05, spreadMax: 0.14, adsFov: 20, sight: [0, 0.135, 0, 0.42], camKick: [0.055, 0.008], modelKick: [0.25, 0.8, 4.5, -11, 1.2, 2], fovKick: 4.5, reloadDur: 2.1, reloadType: 'mag', auto: false, falloff: null, tracer: 0.03, flashScale: 1.7, sound: 'sniperFire', shell: [0.03, INK.ORANGE], moveSpread: 0.004, cycleDur: 0.85, pvp: [150, 1.5, null] },
+  revolver: { name: 'Revolver', hint: ui("Solo: unlimited reserve · 6 shots, then R to reload"), kind: 'revolver', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.4, damage: 42, headMul: 2.4, pellets: 1, spread: 0.006, adsSpread: 0.002, spreadKick: 0.02, spreadMax: 0.06, adsFov: 52, sight: [0, 0.08, -0.34, 0.42], camKick: [0.038, 0.007], modelKick: [0.3, 0.9, 3.2, -10, 1.5, 2.5], fovKick: 2.5, reloadDur: 1.6, reloadType: 'cylinder', auto: false, falloff: null, tracer: 0.026, flashScale: 1.35, sound: 'revolver', shell: null, moveSpread: 0.0015, pvp: [42, 2.4, [9, 34, 0.42]] },
+  smg: { name: 'SMG', hint: ui("Rapid fire · Close combat on the move"), kind: 'smg', magSize: 28, reserve: 168, maxReserve: 336, interval: 1 / 16, damage: 16, headMul: 2, pellets: 1, spread: 0.022, adsSpread: 0.007, spreadKick: 0.005, spreadMax: 0.065, adsFov: 64, sight: [0, 0.09, -0.1, 0.32], camKick: [0.006, 0.004], modelKick: [0.2, 0.2, 1.7, -2, 1, 1.5], fovKick: 0.7, reloadDur: 1.15, reloadType: 'mag', auto: true, falloff: [12, 38, 0.35], tracer: 0.016, flashScale: 0.8, sound: 'shot', shell: [0.018, INK.ORANGE], moveSpread: 0.0005, pvp: [13, 1.7, [10, 30, 0.3]] },
 };
 
 const ARSENAL = {
-  ak47: { name: 'AK-47', hint: 'Güçlü otomatik · Kontrollü kısa seriler', damage: 31, interval: 1 / 8, magSize: 30, reserve: 150, maxReserve: 300, spread: .02, adsSpread: .0045, camKick: [.018, .005], reloadDur: 1.9, pvp: [24, 1.8, [18, 60, .45]] },
-  m4a1: { name: 'M4A1', hint: 'Dengeli otomatik · Düşük geri tepme', damage: 22, interval: 1 / 12, magSize: 30, reserve: 180, maxReserve: 360, spread: .012, adsSpread: .0025, camKick: [.007, .002], reloadDur: 1.5, pvp: [17, 1.8, [20, 65, .4]] },
-  famas: { name: 'FAMAS', hint: 'Her tıklamada 3 mermi · Orta menzil', damage: 25, interval: .075, magSize: 30, reserve: 150, maxReserve: 300, spread: .012, adsSpread: .002, camKick: [.009, .002], reloadDur: 1.7, auto: false, burstSize: 3, pvp: [19, 1.8, [22, 65, .5]] },
-  m249: { name: 'M249', hint: '75 mermilik şerit · Uzun baskı ateşi · Yavaş doldurma', damage: 23, interval: 1 / 12, magSize: 75, reserve: 225, maxReserve: 450, spread: .025, adsSpread: .008, spreadMax: .09, camKick: [.011, .006], reloadDur: 3.6, pvp: [18, 1.7, [22, 70, .4]], moveSpread: .002 },
-  dmr: { name: 'DMR', hint: 'Yarı otomatik · Hassas uzun menzil', damage: 65, interval: .36, magSize: 12, reserve: 72, maxReserve: 144, spread: .03, adsSpread: .0008, camKick: [.026, .003], reloadDur: 1.85, adsFov: 38, auto: false, headMul: 2.4, pvp: [45, 2, [35, 100, .65]] },
+  ak47: { name: 'AK-47', hint: ui("Powerful automatic · Fire in short bursts"), damage: 31, interval: 1 / 8, magSize: 30, reserve: 150, maxReserve: 300, spread: .02, adsSpread: .0045, camKick: [.018, .005], reloadDur: 1.9, pvp: [24, 1.8, [18, 60, .45]] },
+  m4a1: { name: 'M4A1', hint: ui("Balanced automatic · Low recoil"), damage: 22, interval: 1 / 12, magSize: 30, reserve: 180, maxReserve: 360, spread: .012, adsSpread: .0025, camKick: [.007, .002], reloadDur: 1.5, pvp: [17, 1.8, [20, 65, .4]] },
+  famas: { name: 'FAMAS', hint: ui("3 shots per click · Medium range"), damage: 25, interval: .075, magSize: 30, reserve: 150, maxReserve: 300, spread: .012, adsSpread: .002, camKick: [.009, .002], reloadDur: 1.7, auto: false, burstSize: 3, pvp: [19, 1.8, [22, 65, .5]] },
+  m249: { name: 'M249', hint: ui("75-round belt · Sustained fire · Slow reload"), damage: 23, interval: 1 / 12, magSize: 75, reserve: 225, maxReserve: 450, spread: .025, adsSpread: .008, spreadMax: .09, camKick: [.011, .006], reloadDur: 3.6, pvp: [18, 1.7, [22, 70, .4]], moveSpread: .002 },
+  dmr: { name: 'DMR', hint: ui("Semi-auto · Precise at long range"), damage: 65, interval: .36, magSize: 12, reserve: 72, maxReserve: 144, spread: .03, adsSpread: .0008, camKick: [.026, .003], reloadDur: 1.85, adsFov: 38, auto: false, headMul: 2.4, pvp: [45, 2, [35, 100, .65]] },
 };
-Object.assign(GUNS.sniper, { scopeZooms: [2, 4, 8], zoomIndex: 1, hint: 'Dürbün 2–8× · Sağ tık + tekerlek' });
+Object.assign(GUNS.sniper, { scopeZooms: [2, 4, 8], zoomIndex: 1, hint: ui("Scope 2–8× · RMB + wheel") });
 Object.assign(ARSENAL.famas, { sight: [0, .25, -.08, .38] });
-Object.assign(ARSENAL.dmr, { scope: true, scopeZooms: [2, 3, 4, 6], zoomIndex: 0, hint: 'Yarı otomatik · Dürbün 2–6× · Sağ tık + tekerlek' });
-ARSENAL.dual = { name: 'Çift Tabanca', hint: 'İki el · Sırayla ateş · 30 mermi', damage: 28, magSize: 30, reserve: 150, maxReserve: 300, interval: .135, reloadDur: 2.25, auto: false, spread: .024, adsSpread: .012, adsFov: 66, camKick: [.012, .006], modelKick: [0, 0, 0, 0, 0, 0], falloff: [14, 45, .4], pvp: [23, 1.8, [12, 40, .4]], sound: 'revolver', flashScale: .7, fovKick: .8 };
+Object.assign(ARSENAL.dmr, { scope: true, scopeZooms: [2, 3, 4, 6], zoomIndex: 0, hint: ui("Semi-auto · Scope 2–6× · RMB + wheel") });
+ARSENAL.dual = { name: ui("Dual Pistols"), hint: ui("Dual wield · Alternating fire · 30 rounds"), damage: 28, magSize: 30, reserve: 150, maxReserve: 300, interval: .135, reloadDur: 2.25, auto: false, spread: .024, adsSpread: .012, adsFov: 66, camKick: [.012, .006], modelKick: [0, 0, 0, 0, 0, 0], falloff: [14, 45, .4], pvp: [23, 1.8, [12, 40, .4]], sound: 'revolver', flashScale: .7, fovKick: .8 };
 for (const [kind, spec] of Object.entries(ARSENAL)) GUNS[kind] = { ...GUNS.rifle, ...spec, kind };
 
 export class Gun extends ViewModel {
@@ -170,7 +171,7 @@ export class Gun extends ViewModel {
     if (st.reloadPressed && this.mag < this.magSize && this.canReload && !this.reloading && this.pumpT <= 0) { this.startReload(); return; }
     const wantFire = this.burstSize ? (this.burstLeft > 0 || st.firePressed) : this.auto ? st.fire : st.firePressed;
     if (wantFire && this.fireT <= 0 && this.pumpT <= 0 && !st.blockFire) {
-      if (this.mag <= 0) { if (st.firePressed) { audio.empty(); this.startReload(); if (!this.canReload && this.ctx.game.mode === 'solo') this.ctx.hud.tip('Mermi bitti · 5: Revolver · F: Katana ile cephane kazan', 3); } }
+      if (this.mag <= 0) { if (st.firePressed) { audio.empty(); this.startReload(); if (!this.canReload && this.ctx.game.mode === 'solo') this.ctx.hud.tip(ui("Out of ammo · 5: Revolver · F: Earn ammo with katana kills"), 3); } }
       else { if (this.reloading) { this.reloading = false; if (this.handL) this.handL.position.copy(this.handLPos); } this.fire(st); }
     }
   }
@@ -392,7 +393,7 @@ export class Sniper extends Gun {
 
 export class Katana extends ViewModel {
   constructor(ctx) {
-    super(ctx); this.name = 'Katana'; this.hint = 'Geniş savuruş · Sağ tık ile gard al'; this.kind = 'katana';
+    super(ctx); this.name = 'Katana'; this.hint = ui("Wide slash · RMB to block"); this.kind = 'katana';
     this.basePos.set(0.27, -0.25, -0.4); this.baseRot.set(0.75, 0.15, -0.35); this.aimPos.copy(this.basePos);
     this.slashT = 0; this.slashDur = 0.3; this.combo = 0; this.comboT = 0; this.blocking = false; this.blockT = 0; this.blockAmt = 0; this.hitDone = false; this.cooldown = 0; this.damage = 90; this.hitTargets = new Set(); this.hitFeedback = false;
     // guard pose: the sword simply comes in close to the face, held upright

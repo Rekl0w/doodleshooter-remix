@@ -1,3 +1,4 @@
+import { ui } from './i18n.js';
 // Peer-to-peer networking over WebRTC, using the public PeerJS signalling service.
 // Nothing runs on a server of ours: the host player's browser is the authority, every other
 // player connects straight to it. That is what lets multiplayer work from a static Vercel deploy.
@@ -9,7 +10,7 @@
 
 // a local dev server gets its own namespace so testing can never wander into a live lobby
 const LOCAL = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
-const PREFIX = LOCAL ? 'doodle-remix-dev-v8-' : 'doodle-remix-v8-';
+const PREFIX = LOCAL ? 'doodle-remix-dev-v9-' : 'doodle-remix-v9-';
 const PUBLIC_SLOTS = 16;
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const makeCode = () => Array.from({ length: 5 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
@@ -50,6 +51,12 @@ export class Net {
     else if (pid === this.hostId) { this.connected = false; if (this.onDisconnect) this.onDisconnect(); }
   }
   _route(msg, from) {
+    // Match/lobby authority belongs to the connected host. Do this before
+    // forwarding, so a guest cannot relay or spoof a host control message.
+    if (['start', 'startreq', 'lobby', 'end', 'backtolobby', 'kick', 'score', 'clock'].includes(msg.t)) {
+      if (this.isHost || from !== this.hostId || (msg.from && msg.from !== this.hostId)) return;
+    }
+    if (this.isHost) msg = { ...msg, from };
     // clients can address each other; the host forwards those
     if (this.isHost && msg.to && msg.to !== this.id) { const c = this.conns.get(msg.to); if (c && c.open) c.send(msg); return; }
     if (this.isHost && msg.relay) { for (const [pid, c] of this.conns) if (pid !== from && c.open) c.send({ t: msg.t, d: msg.d, from }); }
@@ -115,7 +122,7 @@ export class Net {
   // try every public slot at the same time and take the first host that says welcome
   async quickJoin(meta = {}, onStatus = null) {
     this.leave(); this.isHost = false; this.peer = await this._newPeer(null); this.id = this.peer.id; this._keepAlive(this.peer);
-    if (onStatus) onStatus('Açık odalar aranıyor…');
+    if (onStatus) onStatus(ui("Looking for public rooms…"));
     const ids = []; for (let i = 0; i < PUBLIC_SLOTS; i++) for (const suf of ['', '-1', '-2', '-3']) ids.push(PREFIX + 'PUB' + i + suf);
     const winner = await new Promise((resolve) => {
       let pending = ids.length, done = false; const attempts = [], offers = []; let gather = null;
@@ -129,7 +136,7 @@ export class Net {
       for (const hostId of ids) {
         let conn; try { conn = this.peer.connect(hostId, { reliable: true, serialization: 'json', metadata: probeMeta }); } catch (e) { pending--; continue; }
         const a = { conn, hostId, done: false }; attempts.push(a);
-        conn.on('data', (msg) => { if (!msg || a.done) return; if (msg.t === 'welcome') { a.done = true; pending--; offers.push({ conn, hostId, welcome: msg.d }); if (onStatus) onStatus(`${offers.length} açık oda bulundu…`); if (pending <= 0) settle(); else if (!gather) gather = setTimeout(settle, 1500); } else if (msg.t === 'refused') failOne(a); });
+        conn.on('data', (msg) => { if (!msg || a.done) return; if (msg.t === 'welcome') { a.done = true; pending--; offers.push({ conn, hostId, welcome: msg.d }); if (onStatus) onStatus(ui`${offers.length} open rooms found…`); if (pending <= 0) settle(); else if (!gather) gather = setTimeout(settle, 1500); } else if (msg.t === 'refused') failOne(a); });
         conn.on('error', () => failOne(a)); conn.on('close', () => failOne(a));
       }
       if (pending <= 0) settle();
@@ -155,7 +162,7 @@ export class Net {
       for (const hostId of ids) {
         let conn; try { conn = peer.connect(hostId, { reliable: true, serialization: 'json', metadata: probeMeta }); } catch (e) { pending--; continue; }
         const a = { conn, hostId, done: false }; attempts.push(a);
-        conn.on('data', (msg) => { if (!msg || a.done) return; if (msg.t === 'welcome' || msg.t === 'refused') { a.done = true; pending--; const d = msg.d || {}; offers.push({ id: hostId.slice(PREFIX.length), code: d.code || hostId.slice(PREFIX.length), players: d.players || 0, max: d.max || 10, inMatch: !!d.inMatch, hostName: d.hostName || '', full: msg.t === 'refused' }); if (onStatus) onStatus(`${offers.length} oda bulundu…`); if (pending <= 0) settle(); else if (!gather) gather = setTimeout(settle, 2200); } });
+        conn.on('data', (msg) => { if (!msg || a.done) return; if (msg.t === 'welcome' || msg.t === 'refused') { a.done = true; pending--; const d = msg.d || {}; offers.push({ id: hostId.slice(PREFIX.length), code: d.code || hostId.slice(PREFIX.length), players: d.players || 0, max: d.max || 10, inMatch: !!d.inMatch, hostName: d.hostName || '', full: msg.t === 'refused' }); if (onStatus) onStatus(ui`${offers.length} rooms found…`); if (pending <= 0) settle(); else if (!gather) gather = setTimeout(settle, 2200); } });
         conn.on('error', () => failOne(a)); conn.on('close', () => failOne(a));
       }
       if (pending <= 0) settle();

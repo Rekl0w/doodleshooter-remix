@@ -1,3 +1,5 @@
+import { ui, language, selectLanguage } from './i18n.js';
+import { appearanceFor, saveAppearance } from './appearance.js';
 // Game bootstrap: solo waves, free-for-all lobbies, checkpoints, scoring, screens and the loop.
 // Online play is peer-to-peer: one player's browser hosts the lobby and keeps score, every
 // player runs their own body, and each one tells the others what it did.
@@ -28,6 +30,7 @@ let mapKey = knownMap(localStorage.getItem('doodle_map') || 'district');
 let level = buildLevel(R.scene, world, mapKey, { arena: false });
 let nav = new NavGrid(world, level.bounds, level.navCell || 1).build();
 R.post.uniforms.uDesert.value = mapKey === 'dust2' ? 1 : 0;
+R.setAppearance(appearanceFor(mapKey));
 let loadedKey = mapKey, arenaLoaded = false;
 audio.setTune(mapKey === 'mexico' ? 'mexico' : 'district');
 // the map in play: solo uses the picked map, a match uses the host's choice; a rebuild wipes broken props
@@ -43,6 +46,7 @@ function setLevel(key, on, force = false) {
   level.animated.length = 0; world.clear();
   level = buildLevel(R.scene, world, key, { arena: on }); nav = new NavGrid(world, level.bounds, level.navCell || 1).build();
   R.post.uniforms.uDesert.value = key === 'dust2' ? 1 : 0;
+  R.setAppearance(appearanceFor(key));
   ctx.level = level; ctx.nav = nav; if (window.__game) { window.__game.level = level; window.__game.nav = nav; }
   audio.setTune(key === 'mexico' ? 'mexico' : 'district');
 }
@@ -122,16 +126,16 @@ ctx.hitPlayer = (t, dmg, info) => {
     effects.strokeBurst(info.point, INK.ORANGE, 8, 6, { life: 0.22, size: 0.035 }); audio.shieldHit(t.center);
     const ret = Math.random() < 0.4;
     if (ret) {
-      effects.tracer(info.point, player.eye, INK.RED, 0.03, 0.08); hud.tip('Geri yollandı', 0.9); input.rumble(0.5, 0.4, 90);
+      effects.tracer(info.point, player.eye, INK.RED, 0.03, 0.08); hud.tip(ui("Returned to sender"), 0.9); input.rumble(0.5, 0.4, 90);
       player.lastHitBy = t.id; player.lastHit = { from: t.center.toArray(), crit: false, amount: dmg * 0.6, src: 'deflect' }; player.takeDamage(dmg * 0.6, t.center);
-    } else hud.tip('Savuşturuldu', 0.7);
+    } else hud.tip(ui("Deflected"), 0.7);
     net.sendTo(t.id, 'parry', { ret, by: net.id });
     return;
   }
   const facing = t.blocking ? _v.subVectors(player.center, t.center).normalize().dot(t.forward) : -1;
   const frontHit = /^(head|torso|arm|fore)/.test(info.part || '');
   // a slash is only parried by a guard that just came up and faces you
-  if (facing > 0.6 && frontHit && info.source === 'katana' && t.parryWindow) { effects.strokeBurst(info.point, INK.ORANGE, 10, 6, { life: 0.25, size: 0.04 }); audio.shieldHit(t.center); game.hitstop(0.08, 0.15); player.weapons[player.katanaIndex].cooldown = Math.max(player.weapons[player.katanaIndex].cooldown, 0.6); input.rumble(0.6, 0.3, 90); hud.tip('Engellendi', 0.9); return; }
+  if (facing > 0.6 && frontHit && info.source === 'katana' && t.parryWindow) { effects.strokeBurst(info.point, INK.ORANGE, 10, 6, { life: 0.25, size: 0.04 }); audio.shieldHit(t.center); game.hitstop(0.08, 0.15); player.weapons[player.katanaIndex].cooldown = Math.max(player.weapons[player.katanaIndex].cooldown, 0.6); input.rumble(0.6, 0.3, 90); hud.tip(ui("Blocked"), 0.9); return; }
   effects.blood(info.point, info.dir, clamp(0.4 + dmg / 80, 0.4, 1.6), { ink: INK.RED }); hud.hitmarker(false, info.crit); audio.hitEnemy(t.center); t.flash();
   net.sendTo(t.id, 'pdmg', { amount: Math.round(dmg), from: player.center.toArray().map((v) => +v.toFixed(1)), by: net.id, crit: !!info.crit, src: info.source });
 };
@@ -145,7 +149,7 @@ ctx.cutRopes = (eye, dir, range) => {
     for (let i = 0; i <= 14; i++) {
       _rq.lerpVectors(_rp, r.gPoint, i / 14).sub(eye); const t = _rq.dot(dir); if (t < 0.3 || t > range) continue;
       const lat = Math.sqrt(Math.max(0, _rq.lengthSq() - t * t)); if (lat > 0.9) continue;
-      _rq.add(eye); effects.strokeBurst(_rq, INK.ORANGE, 10, 5, { life: 0.25, size: 0.035 }); net.sendTo(r.id, 'cut', {}); hud.tip('İp kesildi', 0.9); cut = true; break;
+      _rq.add(eye); effects.strokeBurst(_rq, INK.ORANGE, 10, 5, { life: 0.25, size: 0.035 }); net.sendTo(r.id, 'cut', {}); hud.tip(ui("Rope cut"), 0.9); cut = true; break;
     }
   }
   return cut;
@@ -204,7 +208,7 @@ function spawnPickup(kind, pos, id = null) {
 }
 function removePickup(p) { R.scene.remove(p.mesh); const i = pickups.indexOf(p); if (i >= 0) pickups.splice(i, 1); }
 function collectPickup(p) {
-  if (p.kind === 'ammo') { player.addAmmoAll(0.4); player.ordnance.resupply(); player.grenades = Math.min(player.maxGrenades, player.grenades + 1); hud.kill('+Cephane · +Bomba', 0); } else { player.hp = Math.min(player.maxHp, player.hp + 35); hud.kill(level.key === 'mexico' ? 'Taco · +35 can' : '+35 can', 0); }
+  if (p.kind === 'ammo') { player.addAmmoAll(0.4); player.ordnance.resupply(); player.grenades = Math.min(player.maxGrenades, player.grenades + 1); hud.kill(ui("+Ammo · +Grenade"), 0); } else { player.hp = Math.min(player.maxHp, player.hp + 35); hud.kill(level.key === 'mexico' ? ui("Taco · +35 health") : ui("+35 health"), 0); }
   audio.pickup(); effects.strokeBurst(p.mesh.position, p.kind === 'ammo' ? INK.BLUE : INK.GREEN, 12, 4, { life: 0.3 });
 }
 function updatePickups(dt) {
@@ -235,19 +239,19 @@ const ROSTER = [
 ];
 const MODIFIERS = [
   { name: '', apply: () => { enemies.mods.speed = 1; enemies.mods.damage = 1.2; enemies.mods.incomingDamage = 1.2; } },
-  { name: 'Kafein · Daha hızlı düşmanlar', apply: () => { enemies.mods.speed = 1.35; enemies.mods.damage = 1.02; enemies.mods.incomingDamage = 1.2; } },
-  { name: 'Koyu mürekkep · Daha sert saldırılar', apply: () => { enemies.mods.speed = 0.9; enemies.mods.damage = 1.68; enemies.mods.incomingDamage = 1.2; } },
-  { name: 'Sürü · Daha kalabalık, daha kırılgan', swarm: true, apply: () => { enemies.mods.speed = 1.15; enemies.mods.damage = 1.08; enemies.mods.incomingDamage = 1.5; } },
+  { name: ui("Caffeine · Faster enemies"), apply: () => { enemies.mods.speed = 1.35; enemies.mods.damage = 1.02; enemies.mods.incomingDamage = 1.2; } },
+  { name: ui("Dark ink · Stronger attacks"), apply: () => { enemies.mods.speed = 0.9; enemies.mods.damage = 1.68; enemies.mods.incomingDamage = 1.2; } },
+  { name: ui("Swarm · More enemies, less health"), swarm: true, apply: () => { enemies.mods.speed = 1.15; enemies.mods.damage = 1.08; enemies.mods.incomingDamage = 1.5; } },
 ];
 const tips = () => [
-  `Tutun: <b>${hud.key('grapple')}</b> basılı tut ve ipi sar · Bırak: tuşu bırak`,
-  `Mermin biterse <b>${hud._pad ? 'Yön tuşu aşağı' : '5'}</b>: sınırsız yedekli revolver`,
-  'Katana öldürmeleri cephane verir · F ile hızlı kes ve silahına dön',
-  `<b>${hud.key('grenade')}</b> basılı: atış yönü ve patlama alanı`,
-  `Havada tekrar <b>${hud.key('jump')}</b>: çift zıplama`,
+  ui`Grapple: <b>${hud.key('grapple')}</b> hold to reel in · Release to detach`,
+  ui`Out of ammo? Press <b>${hud._pad ? ui("D-pad down") : '5'}</b>: revolver with unlimited reserve ammo`,
+  ui("Katana kills refill ammo · Press F to slash and return to your gun"),
+  ui`<b>${hud.key('grenade')}</b> hold: trajectory and blast preview`,
+  ui`In the air, press again <b>${hud.key('jump')}</b>: double jump`,
 ];
 const bossFor = (n) => BOSSES[(Math.floor(n / 5) - 1) % BOSSES.length];
-const enemyName = (t) => ({ boss: 'Karalayıcı', eraser: 'Silgi', inkblot: 'Mürekkep Lekesi' })[t] || t.toUpperCase();
+const enemyName = (t) => ({ boss: ui("Doodler"), eraser: ui("Eraser"), inkblot: ui("Inkblot") })[t] || t.toUpperCase();
 function startWave(n) {
   player.ordnance.resupply();
   game.wave = n; game.queue = []; game.spawnT = 2; game.intermission = 0; game.boss = null; hud.setBoss(null, null);
@@ -263,14 +267,14 @@ function startWave(n) {
   const pool = ROSTER.filter((r) => n >= r.from).map((r) => ({ t: r.t, w: r.w * Math.min(1, 0.3 + 0.25 * (n - r.from)) }));
   const total = pool.reduce((a, r) => a + r.w, 0);
   for (let i = 0; i < count; i++) { let r = Math.random() * total, t = pool[0].t; for (const c of pool) { r -= c.w; if (r <= 0) { t = c.t; break; } } game.queue.push(t); }
-  if (boss) { hud.message('DALGA ' + n, enemyName(bossFor(n)) + ' yaklaşıyor', 3); audio.bossRoar(player.center); }
-  else hud.message('DALGA ' + n, n === 1 ? 'İlk çizgiler geliyor · Hareket halinde kal' : mod.name || choose(['Çizgiyi boz', 'Mürekkebi akıt', 'Çatılara çık', 'Katanayla cephane kazan', 'Mermileri geri savuştur']), 2.6);
+  if (boss) { hud.message(ui("WAVE ") + n, enemyName(bossFor(n)) + ui(" approaching"), 3); audio.bossRoar(player.center); }
+  else hud.message(ui("WAVE ") + n, n === 1 ? ui("The first enemies are coming · Keep moving") : mod.name || choose([ui("Break the line"), ui("Let the ink flow"), ui("Take to the rooftops"), ui("Earn ammo with katana kills"), ui("Deflect bullets back")]), 2.6);
   audio.wave();
   if (n <= tips().length) hud.tip(tips()[n - 1], 7);
   player.grenades = Math.min(player.maxGrenades, player.grenades + 1);
   player.addAmmoAll(0.1);
   for (let i = 0; i < 7; i++) spawnPickup(i < 5 ? 'ammo' : 'health', choose(level.pickups));
-  if (n >= 5 && n % 5 === 0 && n > checkpoint) { checkpoint = n; localStorage.setItem('doodle_checkpoint', String(n)); hud.kill('Kontrol noktası · ' + n + '. dalga', 0); }
+  if (n >= 5 && n % 5 === 0 && n > checkpoint) { checkpoint = n; localStorage.setItem('doodle_checkpoint', String(n)); hud.kill(ui("Checkpoint · ") + n + ui(". wave"), 0); }
 }
 function pickSpawn(type) {
   const spots = type === 'sniper' ? level.snipers : level.spawns; const pp = player.body.pos;
@@ -289,7 +293,7 @@ function pickSpawn(type) {
 }
 function updateWaves(dt) {
   if (game.intermission > 0) {
-    game.intermission -= dt; hud.setTimer('Sonraki dalga: ' + Math.ceil(game.intermission) + ' sn');
+    game.intermission -= dt; hud.setTimer(ui("Next wave: ") + Math.ceil(game.intermission) + ui(" s"));
     if (game.intermission <= 0) { hud.setTimer(''); startWave(game.wave + 1); }
     return;
   }
@@ -301,7 +305,7 @@ function updateWaves(dt) {
     }
   }
   if (!game.queue.length && enemies.alive === 0) {
-    game.intermission = 8; hud.message('DALGA ' + game.wave + ' TAMAMLANDI', 'Nefeslen · +' + 200 * game.wave, 2.5);
+    game.intermission = 8; hud.message(ui("WAVE ") + game.wave + ui(" CLEARED"), ui("Take a breath · +") + 200 * game.wave, 2.5);
     game.addScore(200 * game.wave, null); audio.waveClear(); player.hp = Math.min(player.maxHp, player.hp + 40);
   }
   hud.setWave(game.wave, enemies.alive + game.queue.length);
@@ -309,14 +313,14 @@ function updateWaves(dt) {
 enemies.onKill = (e, info, over) => {
   game.kills++; game.combo++; game.comboT = 3.5;
   let label = e.T.name, pts = e.T.score;
-  if (info.crit) { label = 'Kafadan vuruş'; pts += 60; }
-  if (info.source === 'katana') { label = over ? 'Tek kesik' : 'Kesildi'; pts += 50; }
-  if (info.source === 'focus') { label = 'Bitirici'; pts += 150; }
+  if (info.crit) { label = ui("Headshot"); pts += 60; }
+  if (info.source === 'katana') { label = over ? ui("Clean cut") : ui("Slashed"); pts += 50; }
+  if (info.source === 'focus') { label = ui("Finisher"); pts += 150; }
   if (info.source === 'katana' || info.source === 'focus') { game.katanaStreak++; player.weapons[player.katanaIndex].addBlood(0.42); if (game.katanaStreak >= KATANA_CHARGE_KILLS) enterFocus(); }
   else if (!['blast', 'mine'].includes(info.source)) game.katanaStreak = 0;
-  if (info.source === 'deflect') { label = 'Geri yollandı'; pts += 120; }
-  if (info.source === 'fall') label = 'Sayfadan düştü';
-  else if (!player.body.onGround && info.source !== 'deflect') { label += ' · Havada av'; pts += 40; }
+  if (info.source === 'deflect') { label = ui("Returned to sender"); pts += 120; }
+  if (info.source === 'fall') label = ui("fell off the page");
+  else if (!player.body.onGround && info.source !== 'deflect') { label += ui(" · Air kill"); pts += 40; }
   game.addScore(pts, label); audio.kill(!!info.crit || e.T.boss);
   if (game.mode === 'solo' && (info.source === 'katana' || info.source === 'focus')) player.addAmmoAll(0.04);
   const r = Math.random(); if (r < 0.5) spawnPickup('ammo', e.body.pos); else if (r < 0.62) spawnPickup('health', e.body.pos);
@@ -348,7 +352,7 @@ function enterFocus() {
   if (online() || game.focus.chain >= FOCUS_MAX_CHAIN || !focusCandidate()) return;
   const fresh = !game.focus.active;
   game.focus.active = true; game.focus.t = FOCUS_TIME; game.focus.chain++; game.focus.arm = FOCUS_ARM; game.focus.ready = false;
-  if (fresh) { audio.focusIn(); hud.tip(`<b>Katana atılışı hazır</b> · ${hud.key('focus')} basılı tut`, 2.2); }
+  if (fresh) { audio.focusIn(); hud.tip(ui`<b>Katana dash ready</b> · ${hud.key('focus')} hold`, 2.2); }
 }
 function endFocus() { if (!game.focus.active && !game.focus.dash) return; game.focus.active = false; game.focus.target = null; game.focus.chain = 0; game.focus.dash = null; game.katanaStreak = 0; player.dashLock = false; hud.setFocusMark(null); }
 function startFocusDash(target) { game.focus.dash = { target, t: 0, trail: player.center.clone(), lastTrail: 0 }; player.dashLock = true; player.body.vel.set(0, 0, 0); audio.dash(); player.kickFov(5); input.rumble(0.5, 0.4, 120); hud.setFocusMark(null); }
@@ -372,7 +376,7 @@ function updateFocusDash(dt) {
   if (moved < 1e-4 && want > 0.05 && (d.stuckY || 0) > 0.08) { endDash(true); return true; }
   return false;
 }
-function endDash(blocked) { player.dashLock = false; game.focus.dash = null; player.body.vel.set(0, 0, 0); if (blocked) { player.weapons[player.katanaIndex].startSlash(player._weaponState(false, false, 0)); audio.katanaSwing(); hud.tip('Atılma engellendi', 1.2); } }
+function endDash(blocked) { player.dashLock = false; game.focus.dash = null; player.body.vel.set(0, 0, 0); if (blocked) { player.weapons[player.katanaIndex].startSlash(player._weaponState(false, false, 0)); audio.katanaSwing(); hud.tip(ui("Dash blocked"), 1.2); } }
 function focusExecute(target) {
   player.dashLock = false; game.focus.dash = null; player.body.vel.set(0, 0, 0);
   player.weapons[player.katanaIndex].startSlash(player._weaponState(false, false, 0));
@@ -395,7 +399,7 @@ function updateFocus(dt) {
 }
 
 // ---------------- free for all: spawning, death, scoring ----------------
-const HOW = { rifle: 'Tüfek', shotgun: 'Pompalı', sniper: 'Keskin nişancı', katana: 'Katana', revolver: 'Revolver', smg: 'SMG', ak47: 'AK-47', m4a1: 'M4A1', dual: 'Çift Tabanca', famas: 'FAMAS', m249: 'M249', dmr: 'DMR', mine: 'Mayın', grenade: 'Bomba', deflect: 'Seken mermi' };
+const HOW = { rifle: ui("Rifle"), shotgun: ui("Shotgun"), sniper: ui("Sniper"), katana: 'Katana', revolver: 'Revolver', smg: 'SMG', ak47: 'AK-47', m4a1: 'M4A1', dual: ui("Dual Pistols"), famas: 'FAMAS', m249: 'M249', dmr: 'DMR', mine: ui("Mine"), grenade: ui("Grenade"), deflect: ui('Deflected bullet') };
 const howWord = (src) => HOW[src] || null;
 const spawnSpots = () => (level.arenaSpawns && level.arenaSpawns.length ? level.arenaSpawns : level.spawns);
 function arenaSpawn() {
@@ -415,14 +419,14 @@ function onLocalDeath() {
   const killer = player.lastHitBy || null; const h = player.lastHit || {};
   const dir = h.from ? player.center.clone().sub(new THREE.Vector3().fromArray(h.from)).normalize().toArray().map((v) => +v.toFixed(2)) : null;
   const how = killer ? howWord(h.src) : null;
-  net.broadcast('pdead', { killer, dir, over: !!(h.crit || h.amount >= 90 || h.src === 'katana'), how, crit: !!h.crit });
+  net.broadcast('pdead', { killer, dir, over: !!(h.crit || h.amount >= 90 || h.src === 'katana'), src: h.src, crit: !!h.crit });
   if (net.isHost) tallyDeath(net.id, killer);
   game.respawnT = RESPAWN; game.state = 'dying'; game.deathT = 0;
   const kn = killer && scores.get(killer) ? scores.get(killer).name : null;
-  hud.kill(kn ? kn + ' seni eledi' + (how ? ' · ' + how + (h.crit ? ' Kafadan vuruş' : '') : '') : 'Mürekkebin tükendi', 0);
+  hud.kill(kn ? kn + ui(" eliminated you") + (how ? ' · ' + how + (h.crit ? ui(" Headshot") : '') : '') : ui("Out of ink"), 0);
 }
 function respawnLocal() {
-  player.reset(arenaSpawn()); player.name = myName; player.lastHitBy = null; player.lastHit = null; game.state = 'play'; player.shieldT = 2; hud.tip('Doğma koruması · 2 sn', 1.6);
+  player.reset(arenaSpawn()); player.name = myName; player.lastHitBy = null; player.lastHit = null; game.state = 'play'; player.shieldT = 2; hud.tip(ui("Spawn protection · 2 s"), 1.6);
   effects.strokeBurst(player.center, INK.BLUE, 24, 6, { life: 0.5, size: 0.03 }); audio.spawn(player.center);
 }
 function tallyDeath(victim, killer) {
@@ -437,13 +441,13 @@ function refreshScoreHud() {
   if (!online()) return;
   const rows = sortedScores(); const top = rows.slice(0, 3); const myIdx = rows.findIndex(([id]) => id === net.id);
   if (myIdx >= 3) top.push(rows[myIdx]);
-  hud.setPvpScore(top.map(([id, sc]) => `<div class="row${id === net.id ? ' me' : ''}"><span class="rank">${rows.findIndex(([x]) => x === id) + 1}.</span><span>${esc(sc.name)}${id === net.id ? ' (sen)' : ''}</span><b>${sc.kills}</b></div>`).join('') + `<div class="target">Hedef: ${FFA_TARGET} öldürme</div>`);
+  hud.setPvpScore(top.map(([id, sc]) => `<div class="row${id === net.id ? ' me' : ''}"><span class="rank">${rows.findIndex(([x]) => x === id) + 1}.</span><span>${esc(sc.name)}${id === net.id ? ui(" (you)") : ''}</span><b>${sc.kills}</b></div>`).join('') + ui`<div class="target">Target: ${FFA_TARGET} kills</div>`);
   hud.setModifier('');
   if (!hud.el.board.hidden) hud.setBoard(boardHTML());
 }
-function boardHTML(title = 'Herkes tek') {
+function boardHTML(title = ui("Free for all")) {
   const rows = sortedScores();
-  return `<h3>${title}</h3>${rows.map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}${id === net.id ? ' (sen)' : ''}</span><span>${s.kills} öldürme · ${s.deaths} ölüm</span></div>`).join('')}<div class="foot">Hedef: ${FFA_TARGET} öldürme · Kalan ${mmss(matchLeft)} · Oda ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</div>`;
+  return ui`<h3>${title}</h3>${rows.map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}${id === net.id ? ui(" (you)") : ''}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}<div class="foot">Target: ${FFA_TARGET} kills · Remaining ${mmss(matchLeft)} · Lobby ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</div>`;
 }
 function checkWin() {
   if (!net.isHost || !online() || game.over) return;
@@ -453,8 +457,8 @@ function checkWin() {
 }
 function endMatch(winner) {
   game.over = winner; game.overT = 0; game.state = 'over'; endFocus(); input.exitLock(); hud.setBoard(null);
-  const title = winner.id === net.id ? 'Kazandın' : (winner.name || 'Oyuncu') + ' kazandı';
-  hud.setGameplayVisible(false); hud.showScreen(`<h1>${esc(title)}</h1><div class="scoreboard">${sortedScores().map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} öldürme · ${s.deaths} ölüm</span></div>`).join('')}</div><div class="go" id="overGo">Odaya dönülüyor…</div>`);
+  const title = winner.id === net.id ? ui("You win") : (winner.name || ui("Player")) + ui(" wins");
+  hud.setGameplayVisible(false); hud.showScreen(ui`<h1>${esc(title)}</h1><div class="scoreboard">${sortedScores().map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}</div><div class="go" id="overGo">Returning to lobby…</div>`);
 }
 
 // ---------------- networking ----------------
@@ -468,8 +472,8 @@ function removeRemote(id) { player.ordnance.removePeer(id); const r = remote.get
 function lobbyRows() { return [...lobby.players.entries()].map(([id, p]) => ({ id, name: p.name })); }
 function broadcastLobby() { net.send('lobby', { players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, shown: net.aliasCode || net.code }); renderLobby(); }
 const inMatch = () => ['play', 'dying', 'over'].includes(game.state);
-net.onPeerLeave = (id) => { const nm = (lobby.players.get(id) || {}).name; removeRemote(id); broadcastLobby(); if (inMatch()) { hud.kill((nm || 'Oyuncu') + ' ayrıldı', 0); sendScores(); } };
-net.onDisconnect = () => { if (lobby.order && lobby.order.some((id) => id !== lobby.hostId)) migrateHost(); else leaveOnline('Oda sahibi ayrıldı'); };
+net.onPeerLeave = (id) => { const nm = (lobby.players.get(id) || {}).name; removeRemote(id); broadcastLobby(); if (inMatch()) { hud.kill((nm || ui("Player")) + ui(" left"), 0); sendScores(); } };
+net.onDisconnect = () => { if (lobby.order && lobby.order.some((id) => id !== lobby.hostId)) migrateHost(); else leaveOnline(ui("The host left")); };
 // ---- host transfer: when the host goes, the earliest-joined player left takes over on a generation
 // code (the old code is slow to free up on the signalling server); everyone else rejoins there
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -478,35 +482,35 @@ async function migrateHost() { if (migrating) return; migrating = true; try { aw
 async function _migrateHost() {
   const oldHost = lobby.hostId, myId = net.id; const gen = (lobby.gen || 0) + 1; lobby.gen = gen;
   const base = (lobby.code || net.code || '').replace(/-\d+$/, ''); const code = base + '-' + gen;
-  const roster = (lobby.order || []).filter((id) => id !== oldHost && lobby.players.has(id)); if (!roster.length || !base) { leaveOnline('Oda sahibi ayrıldı'); return; }
+  const roster = (lobby.order || []).filter((id) => id !== oldHost && lobby.players.has(id)); if (!roster.length || !base) { leaveOnline(ui("The host left")); return; }
   const successor = roster[0]; const wasInMatch = inMatch();
   if (oldHost) { const r = remote.get(oldHost); if (r) r.dispose(); remote.delete(oldHost); lobby.players.delete(oldHost); scores.delete(oldHost); }
-  hud.message('Oda sahibi ayrıldı', successor === myId ? 'Yeni oda sahibi sensin' : 'Yeni oda sahibine bağlanılıyor…', 2.6);
+  hud.message(ui("The host left"), successor === myId ? ui("You are the new host") : ui("Connecting to the new host…"), 2.6);
   if (successor === myId) {
     let ok = false;
     for (let tries = 0; tries < 2 && !ok; tries++) { try { await net.host({ isPublic: lobby.isPublic, code }); ok = true; } catch (e) { await sleep(800); } }
-    if (!ok) { leaveOnline('Oda devralınamadı'); return; }
+    if (!ok) { leaveOnline(ui("Could not take over the lobby")); return; }
     const mine = lobby.players.get(myId) || { name: myName }; lobby.players.delete(myId); lobby.players.set(net.id, mine);
     const ms = scores.get(myId); scores.delete(myId); if (ms) scores.set(net.id, ms);
     lobby.hostId = net.id; lobby.code = code; lobby.order = [net.id, ...roster.filter((id) => id !== myId)]; net.accepting = true; game.clockStarted = clockRunning || matchLeft < FFA_TIME;
-    net.onAlias = () => { broadcastLobby(); hud.kill('Oda kodu ' + base + ' yeniden açıldı', 0); }; net.claimAlias(base);
+    net.onAlias = () => { broadcastLobby(); hud.kill(ui("Room code ") + base + ui(" reopened"), 0); }; net.claimAlias(base);
     if (game.state === 'over') { /* the results stay up; the host timer now runs here */ } else if (wasInMatch) { if (game.state !== 'play' && game.state !== 'dying') game.state = 'play'; refreshScoreHud(); } else { game.state = 'lobby'; screen = 'lobby'; showStart(); }
     broadcastLobby();
   } else {
     await sleep(1200);
     const deadline = performance.now() + 20000; let joined = false;
     while (!joined && performance.now() < deadline) { try { await net.join(code, { name: myName, prev: myId }); joined = true; } catch (e) { await sleep(1200); } }
-    if (!joined) { leaveOnline('Oda sahibi ayrıldı, bağlantı yeniden kurulamadı'); return; }
+    if (!joined) { leaveOnline(ui("The host left and reconnection failed")); return; }
     lobby.code = code; if (!wasInMatch) { game.state = 'lobby'; screen = 'lobby'; showStart(); }
   }
 }
-net.on('refused', (d) => leaveOnline(d.reason));
+net.on('refused', (d) => leaveOnline(friendlyError(d.reason)));
 net.hostName = myName;
 net.onPeerJoin = (from, meta) => {
   const name = String(meta && meta.name || 'doodle').slice(0, 14);
   if (meta && meta.prev && meta.prev !== from) { const sc = scores.get(meta.prev); if (sc) { scores.delete(meta.prev); scores.set(from, sc); } const r = remote.get(meta.prev); if (r) r.dispose(); remote.delete(meta.prev); lobby.players.delete(meta.prev); if (lobby.order) lobby.order = lobby.order.filter((id) => id !== meta.prev); }
   lobby.players.set(from, { name }); addRemote(from, name); broadcastLobby();
-  if (game.state === 'play' || game.state === 'dying') { if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn: farthestSpawnIndex(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ' katıldı', 0); }
+  if (game.state === 'play' || game.state === 'dying') { if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn: farthestSpawnIndex(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
 };
 net.on('lobby', (d) => {
   lobby.hostId = d.hostId; lobby.isPublic = !!d.isPublic; lobby.code = net.code; lobby.shown = d.shown || net.code; if (d.map) lobby.map = knownMap(d.map); lobby.order = d.players.map((p) => p.id); lobby.players.clear();
@@ -516,9 +520,8 @@ net.on('lobby', (d) => {
   if (inMatch()) { for (const p of d.players) if (!scores.has(p.id)) scores.set(p.id, { name: p.name, kills: 0, deaths: 0 }); refreshScoreHud(); }
   renderLobby();
 });
-net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || 'Oyuncu') + ' ayrıldı', 0); renderLobby(); });
-net.on('start', (d) => { if (net.isHost) return; if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
-net.on('startreq', () => { if (net.isHost && game.state === 'lobby') hostStart(); });
+net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || ui("Player")) + ui(" left"), 0); renderLobby(); });
+net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
 net.on('end', (d) => endMatch(d));
 net.on('backtolobby', () => { if (!net.isHost) toLobbyScreen(); });
 net.on('pickup', (d) => { if (!net.isHost) spawnPickup(d.kind, new THREE.Vector3().fromArray(d.pos), d.id); });
@@ -533,16 +536,17 @@ net.on('pdmg', (d, from) => {
   player.takeDamage(d.amount, d.from ? new THREE.Vector3().fromArray(d.from) : null);
 });
 net.on('pdead', (d, from) => {
-  const r = remote.get(from); const vn = r ? r.name : 'Oyuncu'; const kn = d.killer && scores.get(d.killer) ? scores.get(d.killer).name : null;
+  const r = remote.get(from); const vn = r ? r.name : ui("Player"); const kn = d.killer && scores.get(d.killer) ? scores.get(d.killer).name : null;
   if (r) { r.ragdoll(d.dir ? new THREE.Vector3().fromArray(d.dir) : null, !!d.over); audio.enemyDie(r.center); }
-  const how = d.how ? ' · ' + d.how + (d.crit ? ' Kafadan vuruş' : '') : '';
-  if (d.killer === net.id) { game.kills++; game.addScore(100, 'Eledin: ' + vn + how); audio.kill(true); }
-  else hud.kill(kn ? kn + ' eledi ' + vn + how : vn + ' Sayfadan düştü', 0);
+  const weapon = howWord(d.src);
+  const how = weapon ? ' · ' + weapon + (d.crit ? ui(" Headshot") : '') : '';
+  if (d.killer === net.id) { game.kills++; game.addScore(100, ui("Eliminated: ") + vn + how); audio.kill(true); }
+  else hud.kill(kn ? kn + ui(" eliminated ") + vn + how : vn + ui(" fell off the page"), 0);
   if (net.isHost) tallyDeath(from, d.killer);
 });
 net.on('nade', (d, from) => { if (d) player.throwGrenade({ ...d, id: `${from}:${d.id || ''}` }); });
 net.on('brk', (d) => { const br = level.breakables[d.id]; if (br) breakProp(br, null, false); });
-net.on('parry', (d) => { audio.shieldHit(player.center); input.rumble(0.35, 0.3, 60); effects.strokeBurst(player.eye.clone().addScaledVector(player.forward, 0.5), INK.ORANGE, 8, 5, { life: 0.2, size: 0.03 }); hud.kill(d.ret ? 'Geri yollandı' : 'Savuşturuldu', d.ret ? 25 : 0); });
+net.on('parry', (d) => { audio.shieldHit(player.center); input.rumble(0.35, 0.3, 60); effects.strokeBurst(player.eye.clone().addScaledVector(player.forward, 0.5), INK.ORANGE, 8, 5, { life: 0.2, size: 0.03 }); hud.kill(d.ret ? ui("Returned to sender") : ui("Deflected"), d.ret ? 25 : 0); });
 net.on('shots', (d, from) => {
   const r = remote.get(from); if (!r || !r.root || !r.alive) return;
   _sm.set(r.body.pos.x + r.right.x * 0.3 + r.forward.x * 0.8, r.body.pos.y + 1.35 + r.forward.y * 0.8, r.body.pos.z + r.right.z * 0.3 + r.forward.z * 0.8);
@@ -550,14 +554,14 @@ net.on('shots', (d, from) => {
   for (let i = 0; i + 2 < e.length; i += 3) { _se.set(e[i], e[i + 1], e[i + 2]); effects.tracer(_sm, _se, INK.BLUE, th, 0.06); }
   r.flash(); audio.remoteShot(d.k, _sm);
 });
-net.on('cut', () => { if (player.grapple.state !== 'idle') { player.detachGrapple(false); effects.strokeBurst(player.center, INK.ORANGE, 8, 4, { life: 0.25, size: 0.03 }); hud.tip('İpin kesildi', 1.3); input.rumble(0.5, 0.3, 80); } });
+net.on('cut', () => { if (player.grapple.state !== 'idle') { player.detachGrapple(false); effects.strokeBurst(player.center, INK.ORANGE, 8, 4, { life: 0.25, size: 0.03 }); hud.tip(ui("Your rope was cut"), 1.3); input.rumble(0.5, 0.3, 80); } });
 net.on('score', (rows) => { if (!net.isHost) applyScores(rows); });
-net.on('fell', (d, from) => { if (!net.isHost) return; const sc = scores.get(from); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { text: sc.name + ' Sayfadan düştü · -1' }); hud.kill(sc.name + ' Sayfadan düştü · -1', 0); } });
-net.on('feed', (d) => hud.kill(String(d.text || ''), 0));
+net.on('fell', (d, from) => { if (!net.isHost) return; const sc = scores.get(from); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { event: 'fell', name: sc.name }); hud.kill(sc.name + ui(" fell off the page · -1"), 0); } });
+net.on('feed', (d, from) => { if (from === net.hostId && d.event === 'fell') hud.kill(String(d.name || '') + ui(" fell off the page · -1"), 0); });
 player.onFall = () => {
   if (!online() || !inMatch()) return;
-  hud.kill('Sayfadan düştü · Öldürme -1', 0);
-  if (net.isHost) { const sc = scores.get(net.id); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { text: sc.name + ' Sayfadan düştü · -1' }); } }
+  hud.kill(ui("fell off the page · Kills -1"), 0);
+  if (net.isHost) { const sc = scores.get(net.id); if (sc) { sc.kills = Math.max(0, sc.kills - 1); sendScores(); net.send('feed', { event: 'fell', name: sc.name }); } }
   else net.send('fell', {});
 };
 net.on('clock', (d) => { if (!net.isHost) { matchLeft = d.left; clockRunning = !!d.on; } });
@@ -572,13 +576,13 @@ function idleUpdate(dt) {
   const othersActive = [...remote.values()].some((r) => !r.idle);
   // a host that still has active players stays; kicking it would end their match
   const canDrop = !net.isHost || !othersActive;
-  if (idle > limit - IDLE_WARN && !idleWarned && canDrop) { idleWarned = true; hud.message('Hâlâ burada mısın?', 'Hareketsiz kalırsan odadan çıkarılacaksın.', 3); audio.empty(); }
+  if (idle > limit - IDLE_WARN && !idleWarned && canDrop) { idleWarned = true; hud.message(ui("Still there?"), ui("Move to avoid being removed for inactivity."), 3); audio.empty(); }
   if (idle <= limit - IDLE_WARN) idleWarned = false;
-  if (idle > limit && canDrop) { const back = net.isHost ? null : String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(net.isHost ? 'Oda kapandı: tüm oyuncular hareketsiz' : 'Hareketsizlik nedeniyle odadan çıkarıldın'); lobby.rejoinCode = back; if (back) showStart(); return; }
+  if (idle > limit && canDrop) { const back = net.isHost ? null : String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(net.isHost ? ui("Room closed: all players are inactive") : ui("Removed for inactivity")); lobby.rejoinCode = back; if (back) showStart(); return; }
   // the host also clears out a client that has sat idle past the limit, in case its tab cannot do it itself
-  if (net.isHost) for (const [id, r] of remote) if (r.idle && r.idleSince && performance.now() / 1000 - r.idleSince > limit - IDLE_FLAG + 15) { net.sendTo(id, 'kick', { reason: 'Hareketsizlik nedeniyle odadan çıkarıldın' }); const c = net.conns.get(id); setTimeout(() => { try { c && c.close(); } catch (e) { /* ignore */ } }, 500); }
+  if (net.isHost) for (const [id, r] of remote) if (r.idle && r.idleSince && performance.now() / 1000 - r.idleSince > limit - IDLE_FLAG + 15) { net.sendTo(id, 'kick', { reason: 'idle' }); const c = net.conns.get(id); setTimeout(() => { try { c && c.close(); } catch (e) { /* ignore */ } }, 500); }
 }
-net.on('kick', (d) => { const back = String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(d && d.reason || 'Odadan çıkarıldın'); lobby.rejoinCode = back; if (back) showStart(); });
+net.on('kick', (d) => { const back = String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(d?.reason === 'idle' ? ui("Removed for inactivity") : ui("Removed from the room")); lobby.rejoinCode = back; if (back) showStart(); });
 const sceneClock = new SceneClock();
 let scenePingT = 0, sceneHost = null;
 net.on('scene-ping', (d, from) => { if (net.isHost && Number.isInteger(d?.id)) net.sendTo(from, 'scene-pong', { id: d.id, time: sceneClock.time() }); });
@@ -592,12 +596,12 @@ function netUpdate(dt) {
   if (!net.isHost) { scenePingT -= dt; if (scenePingT <= 0) { scenePingT = 1; net.send('scene-ping', sceneClock.request()); } }
   for (const r of remote.values()) r.update(dt, now);
   // a connection that died without saying so leaves a figure standing around: drop anyone silent too long
-  if (inMatch() && !migrating) for (const [id, r] of remote) { if (r.lastSeen && performance.now() - r.lastSeen > 9000) { if (!net.isHost && id === net.hostId) { net.leave(); migrateHost(); break; } const nm = r.name; removeRemote(id); hud.kill(nm + ' bağlantısı kesildi', 0); if (net.isHost) { const c = net.conns.get(id); if (c) { try { c.close(); } catch (e) { /* ignore */ } net.conns.delete(id); } net.send('leave', { id }); broadcastLobby(); sendScores(); } } }
+  if (inMatch() && !migrating) for (const [id, r] of remote) { if (r.lastSeen && performance.now() - r.lastSeen > 9000) { if (!net.isHost && id === net.hostId) { net.leave(); migrateHost(); break; } const nm = r.name; removeRemote(id); hud.kill(nm + ui(" disconnected"), 0); if (net.isHost) { const c = net.conns.get(id); if (c) { try { c.close(); } catch (e) { /* ignore */ } net.conns.delete(id); } net.send('leave', { id }); broadcastLobby(); sendScores(); } } }
   if (syncTick % 3 === 0 && inMatch()) net.send('ps', encodeLocal(player, player.weaponIndex, { firing: player.firing, idle: input.idleSeconds > IDLE_FLAG }), true);
   if (shotQueue.length) net.broadcast('shots', { k: player.weapon.kind, e: shotQueue.splice(0) });
   if (net.isHost && inMatch() && remote.size > 0) game.clockStarted = true;
   const clockOn = inMatch() && !game.over && (net.isHost ? !!game.clockStarted : clockRunning);
-  if (inMatch() && !game.over) { if (clockOn) matchLeft = Math.max(0, matchLeft - dt); if (net.isHost) { clockT -= dt; if (clockT <= 0) { clockT = 2; net.send('clock', { left: Math.round(matchLeft), on: clockOn }); } } hud.setTimer(clockOn ? mmss(matchLeft) : 'Bir oyuncu katılınca süre başlayacak'); }
+  if (inMatch() && !game.over) { if (clockOn) matchLeft = Math.max(0, matchLeft - dt); if (net.isHost) { clockT -= dt; if (clockT <= 0) { clockT = 2; net.send('clock', { left: Math.round(matchLeft), on: clockOn }); } } hud.setTimer(clockOn ? mmss(matchLeft) : ui("The timer starts when another player joins")); }
   if (net.isHost && clockOn) { game.matchT += dt; if (matchLeft <= 0) { const rows = sortedScores(); const w = rows.length ? { id: rows[0][0], name: rows[0][1].name } : { id: net.id, name: myName }; net.send('end', w); endMatch(w); } }
 }
 function leaveOnline(reason) {
@@ -606,41 +610,44 @@ function leaveOnline(reason) {
   game.menu = false; lobby.status = reason || ''; screen = 'online'; showStart();
 }
 async function createLobby(isPublic) {
-  setStatus('Oda oluşturuluyor…');
+  setStatus(ui("Creating room…"));
   try { await net.host({ isPublic }); }
   catch (err) { setStatus(friendlyError(err)); unlockButtons(); return; }
   lobby.isPublic = isPublic; lobby.map = mapKey; lobby.players.clear(); lobby.players.set(net.id, { name: myName }); lobby.hostId = net.id; lobby.status = '';
   game.state = 'lobby'; screen = 'lobby'; showStart();
 }
 async function joinLobby(code) {
-  setStatus('Bağlanıyor…');
+  setStatus(ui("Connecting…"));
   try { await net.join(code, { name: myName }); } catch (err) { setStatus(friendlyError(err)); unlockButtons(); return; }
   lobby.isPublic = net.isPublic; lobby.status = ''; game.state = 'lobby'; screen = 'lobby'; showStart();
 }
 async function quickPlay() {
   try { await net.quickJoin({ name: myName }, setStatus); lobby.isPublic = true; lobby.status = ''; game.state = 'lobby'; screen = 'lobby'; showStart(); return; }
   catch (err) { if (!/no open public/.test(String(err.message))) { setStatus(friendlyError(err)); unlockButtons(); return; } }
-  setStatus('Açık oda yok · Yeni oda oluşturuluyor…');
+  setStatus(ui("No open rooms · Creating a new room…"));
   await createLobby(true);
 }
 function friendlyError(err) {
-  const m = String(err && err.message || err || ''); if (!m) return 'Bir sorun oluştu';
-  if (/networking library/.test(m)) return 'Bağlantı kütüphanesi yüklenemedi · İnternetini kontrol edip sayfayı yenile.';
-  if (/timed out|signalling/.test(m)) return 'Eşleşme sunucusuna bağlanılamadı · İnternetini kontrol et.';
-  if (/no lobby with that code/.test(m)) return 'Oda bulunamadı · Oda kodunu arkadaşınla kontrol et.';
-  if (/no answer/.test(m)) return 'Oda bulundu ama doğrudan bağlantı kurulamadı · Farklı bir ağ deneyin.';
-  if (/full/.test(m)) return 'Oda dolu · Başka bir odaya katıl.';
-  if (/leave the lobby/.test(m)) return 'Önce mevcut odadan ayrıl.';
+  const m = String(err && err.message || err || ''); if (!m) return ui("Something went wrong");
+  if (/networking library/.test(m)) return ui("Networking could not load · Check your connection and refresh.");
+  if (/timed out|signalling/.test(m)) return ui("Could not reach matchmaking · Check your connection.");
+  if (/no lobby with that code/.test(m)) return ui("Room not found · Check the code with your friend.");
+  if (/no answer/.test(m)) return ui("Room found, but direct connection failed · Try another network.");
+  if (/closed/.test(m)) return ui('Room closed · Try another room.');
+  if (/public lobbies are busy/.test(m)) return ui('Public rooms are busy · Create a private room.');
+  if (/could not connect|could not start/.test(m)) return ui('Could not connect · Try another network.');
+  if (/full/.test(m)) return ui("Room full · Try another room.");
+  if (/leave the lobby/.test(m)) return ui("Leave your current room first.");
   return m;
 }
 function setStatus(t) { lobby.status = t; const el = hud.el.panel.querySelector('#status'); if (el) el.textContent = t; }
 
 // ---------------- screens ----------------
 function settingsHTML() {
-  return `<div class="settings" id="settings">
-    <label>Fare hassasiyeti <input type="range" id="setSens" min="25" max="250" step="5" value="${settings.sens}"><b id="setSensV">${settings.sens}%</b></label>
-    <label><input type="checkbox" id="setInv" ${settings.invert ? 'checked' : ''}> Dikey bakışı ters çevir</label>
-    <label><input type="checkbox" id="setMus" ${musicWanted ? 'checked' : ''}> Müzik <span class="k">(M)</span></label>
+  return ui`<div class="settings" id="settings">
+    <label>Mouse sensitivity <input type="range" id="setSens" min="25" max="250" step="5" value="${settings.sens}"><b id="setSensV">${settings.sens}%</b></label>
+    <label><input type="checkbox" id="setInv" ${settings.invert ? 'checked' : ''}> Invert vertical look</label>
+    <label><input type="checkbox" id="setMus" ${musicWanted ? 'checked' : ''}> Music <span class="k">(M)</span></label>
   </div>`;
 }
 function wireSettings() {
@@ -657,8 +664,8 @@ function wireName(box) {
 }
 function checkpointHTML() {
   if (checkpoint < 5) return '';
-  let h = '<div class="checkpoints"><span>Kontrol noktası</span>';
-  for (let w = 5; w <= checkpoint; w += 5) h += `<button type="button" data-cp="${w}">${w}. dalga</button>`;
+  let h = ui("<div class=\"checkpoints\"><span>Checkpoint</span>");
+  for (let w = 5; w <= checkpoint; w += 5) h += ui`<button type="button" data-cp="${w}">${w}. wave</button>`;
   return h + '</div>';
 }
 function wireCheckpoints(onGo) { const box = hud.el.panel.querySelector('.checkpoints'); if (!box) return; box.addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('button'); if (b) onGo(Number(b.dataset.cp)); }); }
@@ -684,57 +691,72 @@ function mapSketch(key) {
 }
 function mapHTML(sel, canPick) {
   if (LEVELS.length < 2) return '';
-  return `<div class="mapsel" id="mapsel" role="group" aria-label="Harita seçimi"><span>HARİTA SEÇ · ${LEVELS.length} farklı alan</span><div class="mapgrid">${LEVELS.map(m => `<button type="button" class="mapbtn map-${m.style}${m.key === sel ? ' on' : ''}" data-map="${m.key}" aria-pressed="${m.key === sel}" ${canPick ? '' : 'disabled'}>${mapSketch(m.key)}<strong>${m.name}</strong><i>${m.blurb}</i><small>${m.key === sel ? 'SEÇİLİ' : 'SEÇ'}</small></button>`).join('')}</div></div>`;
+  return ui`<div class="mapsel" id="mapsel" role="group" aria-label="Map selection"><span>CHOOSE A MAP · ${LEVELS.length} maps</span><div class="mapgrid">${LEVELS.map(m => `<button type="button" class="mapbtn map-${m.style}${m.key === sel ? ' on' : ''}" data-map="${m.key}" aria-pressed="${m.key === sel}" ${canPick ? '' : 'disabled'}>${mapSketch(m.key)}<strong>${m.name}</strong><i>${m.blurb}</i><small>${m.key === sel ? ui("SELECTED") : ui("SELECT")}</small></button>`).join('')}</div></div>` + appearanceHTML(sel);
 }
-function wireMap(onPick) { const box = hud.el.panel.querySelector('#mapsel'); if (!box) return; box.addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('.mapbtn'); if (b && !b.disabled) onPick(b.dataset.map); }); }
+function wireMap(onPick) { const box = hud.el.panel.querySelector('#mapsel'); if (!box) return; box.addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('.mapbtn'); if (b && !b.disabled) { onPick(b.dataset.map); hud.el.panel.querySelector('#appearance')?.scrollIntoView({ block: 'nearest' }); } }); }
+function appearanceHTML(key) {
+  const selected = appearanceFor(key);
+  return `<fieldset class="appearance" id="appearance" data-appearance-map="${key}"><legend>${ui('Visual style')} · ${mapName(key)}</legend><div class="appearance-options">${[['notebook', ui('Lined notebook'), ui('Original ink and paper')], ['solid', ui('Solid colors'), ui('Smooth surfaces, no paper lines')]].map(([mode, name, hint]) => `<label><input type="radio" name="appearance" value="${mode}" ${selected === mode ? 'checked' : ''}><span class="appearance-card"><span class="appearance-swatch ${mode}" aria-hidden="true"></span><strong>${name}</strong><small>${hint}</small></span></label>`).join('')}</div><p>${ui('Your view only · Other players choose their own style')}</p></fieldset>`;
+}
+function wireAppearance() {
+  const box = hud.el.panel.querySelector('#appearance'); if (!box) return;
+  for (const event of ['click', 'keydown']) box.addEventListener(event, e => e.stopPropagation());
+  box.addEventListener('change', e => {
+    if (!e.target.matches('input[name="appearance"]')) return;
+    const key = box.dataset.appearanceMap, mode = e.target.value;
+    if (saveAppearance(key, mode) && loadedKey === key) R.setAppearance(mode);
+  });
+}
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 function mainHTML() {
-  return `<h1>Doodle District</h1><h2>REMIX · Mürekkep, hareket ve hayatta kalma</h2>
-    <section class="credits" aria-label="Orijinal oyun ve yapımcı">
-      <p>Orijinal oyun: <strong>DoodleShooter · iifor</strong><br>Bu oyun, orijinalin topluluk tarafından düzenlenmiş Remix sürümüdür. Orijinal yapımcıya teşekkürler!</p>
-      <nav aria-label="Orijinal oyunun bağlantıları"><a href="https://doodleshooter.vercel.app/" target="_blank" rel="noopener noreferrer">Orijinal oyunu oyna ↗</a><a href="https://github.com/iifor/doodleshooter" target="_blank" rel="noopener noreferrer">iifor / GitHub kaynak kodu ↗</a></nav>
+  const languagePicker = `<label class="language-picker" id="languagePicker">Language / Dil <select id="setLanguage" aria-label="Language / Dil"><option value="en" ${language === 'en' ? 'selected' : ''}>English</option><option value="tr" ${language === 'tr' ? 'selected' : ''}>Türkçe</option></select></label>`;
+  return languagePicker + ui`<h1>Doodle District</h1><h2>REMIX · Ink, movement and survival</h2>
+    <section class="credits" aria-label="Original game and creator">
+      <p>Original game: <strong>DoodleShooter · iifor</strong><br>A community remix of DoodleShooter. Thanks to the original creator and contributors!</p>
+      <nav aria-label="Original game links"><a href="https://doodleshooter.vercel.app/" target="_blank" rel="noopener noreferrer">Play the original ↗</a><a href="https://github.com/iifor/doodleshooter" target="_blank" rel="noopener noreferrer">iifor / GitHub source ↗</a></nav>
     </section>
-    <div class="mainbtns"><button type="button" class="start" id="soloBtn">OYNA<i>Solo · Dalgalara karşı hayatta kal</i></button><button type="button" id="onlineBtn">ÇEVRİMİÇİ<i>Herkes tek · En fazla 10 oyuncu</i></button></div>
-    ${mapHTML(mapKey, true)}${CONTROLS_HTML}${settingsHTML()}${checkpointHTML()}${best ? `<div class="beststat">En iyi skor：${best}</div>` : ''}`;
+    <div class="mainbtns"><button type="button" class="start" id="soloBtn">PLAY<i>Solo · Survive the waves</i></button><button type="button" id="onlineBtn">ONLINE<i>Free for all · Up to 10 players</i></button></div>
+    ${mapHTML(mapKey, true) + `<button type="button" class="play-map" id="playMapBtn">${ui('Play selected map')}</button>`}${CONTROLS_HTML}${settingsHTML()}${checkpointHTML()}${best ? ui`<div class="beststat">Best score：${best}</div>` : ''}`;
 }
 function onlineHTML() {
-  return `<h1>ÇEVRİMİÇİ</h1><h2>Herkes tek · Hedef: ${FFA_TARGET} öldürme · En fazla 10 oyuncu</h2>
+  return ui`<h1>ONLINE</h1><h2>Free for all · Target: ${FFA_TARGET} kills · Up to 10 players</h2>
     <div class="online" id="online">
-      <div class="row"><span>Oyuncu adın</span><input type="text" class="namebox" id="setName" maxlength="14" value="${esc(myName)}"></div>
-      <div class="row"><button type="button" class="big" id="quickBtn">Hızlı eşleşme</button><span class="hint">Açık bir odaya katıl; oda yoksa yenisini oluştur.</span></div>
-      <div class="row split"><span>veya</span></div>
-      <div class="row"><button type="button" id="createBtn">Oda oluştur</button><div class="radio"><label><input type="radio" name="vis" value="public" ${lobby.isPublic ? 'checked' : ''}> Açık</label><label><input type="radio" name="vis" value="private" ${lobby.isPublic ? '' : 'checked'}> Özel · Arkadaşlar</label></div></div>
-      <div class="row"><span>Oda kodu</span><input type="text" id="codeBox" placeholder="KOD" maxlength="5" autocomplete="off"><button type="button" id="joinBtn">Katıl</button></div>
-      <div class="lobbylist" id="lobbylist"><div class="row"><span>Açık odalar</span><button type="button" class="alt" id="refreshBtn">Yenile</button></div><div class="rows" id="lobbyRows">${lobbyListHTML()}</div></div>
+      <div class="row"><span>Your name</span><input type="text" class="namebox" id="setName" maxlength="14" value="${esc(myName)}"></div>
+      <div class="row"><button type="button" class="big" id="quickBtn">Quick play</button><span class="hint">Join an open room, or create one if none are available.</span></div>
+      <div class="row split"><span>or</span></div>
+      <div class="row"><button type="button" id="createBtn">Create room</button><div class="radio"><label><input type="radio" name="vis" value="public" ${lobby.isPublic ? 'checked' : ''}> Public</label><label><input type="radio" name="vis" value="private" ${lobby.isPublic ? '' : 'checked'}> Private · Friends</label></div></div>
+      <div class="row"><span>Room code</span><input type="text" id="codeBox" placeholder="CODE" maxlength="5" autocomplete="off"><button type="button" id="joinBtn">Join</button></div>
+      <div class="lobbylist" id="lobbylist"><div class="row"><span>Public rooms</span><button type="button" class="alt" id="refreshBtn">Refresh</button></div><div class="rows" id="lobbyRows">${lobbyListHTML()}</div></div>
       <div class="status" id="status">${esc(lobby.status || '')}</div>
-      ${lobby.rejoinCode ? `<div class="row"><button type="button" class="big" id="rejoinBtn">Tekrar katıl ${esc(lobby.rejoinCode)}</button></div>` : ''}
-      <div class="row"><button type="button" class="alt" id="backBtn">Geri</button></div>
+      ${lobby.rejoinCode ? ui`<div class="row"><button type="button" class="big" id="rejoinBtn">Rejoin ${esc(lobby.rejoinCode)}</button></div>` : ''}
+      <div class="row"><button type="button" class="alt" id="backBtn">Back</button></div>
     </div>`;
 }
 function lobbyHTML() {
   const rows = lobbyRows(); const host = net.isHost; const n = rows.length;
-  return `<h1>Oda</h1><h2>Herkes tek · Hedef: ${FFA_TARGET} öldürme · ${n}/${net.maxPlayers} oyuncu</h2>
+  const startButton = host ? `<button type="button" class="big" id="startBtn">${ui('Start match')}</button>` : `<span class="hint" id="hostWait">${ui('Waiting for the host to start')}</span>`;
+  return ui`<h1>Lobby</h1><h2>Free for all · Target: ${FFA_TARGET} kills · ${n}/${net.maxPlayers} players</h2>
     <div class="online" id="online">
-      <div class="row"><span>Kod</span><span class="code">${String(net.isHost ? (net.aliasCode || net.code) : (lobby.shown || net.code) || '').replace(/-\d+$/, '')}</span></div>
+      <div class="row"><span>Code</span><span class="code">${String(net.isHost ? (net.aliasCode || net.code) : (lobby.shown || net.code) || '').replace(/-\d+$/, '')}</span></div>
       ${mapHTML(lobby.map || mapKey, host)}
-      <div class="hint">${lobby.isPublic ? 'Herkes hızlı eşleşme veya oda koduyla katılabilir.' : 'Arkadaşın ÇEVRİMİÇİ ekranında bu kodu yazıp Katıl düğmesine bassın.'}</div>
-      <div class="plist">${rows.map((p) => `<div class="${p.id === lobby.hostId ? 'host' : ''}${p.id === net.id ? ' me' : ''}"><span>${esc(p.name)}</span><span>${p.id === net.id ? 'sen' : ''}</span></div>`).join('')}</div>
-      <div class="row"><button type="button" class="big" id="startBtn">Maçı başlat</button><button type="button" class="alt" id="leaveBtn">Ayrıl</button></div>
-      <div class="status" id="status">${esc(lobby.status || '')}</div><div class="hint">Her oyuncu maçı başlatabilir · ${n < 2 ? 'Maç başladıktan sonra da katılabilirsiniz' : n + ' oyuncu hazır'}</div>
+      <div class="hint">${lobby.isPublic ? ui("Anyone can join through quick play or a room code.") : ui("Your friend can enter this code on the ONLINE screen and press Join.")}</div>
+      <div class="plist">${rows.map((p) => `<div class="${p.id === lobby.hostId ? 'host' : ''}${p.id === net.id ? ' me' : ''}"><span>${esc(p.name)}</span><span>${p.id === net.id ? ui("you") : ''}</span></div>`).join('')}</div>
+      <div class="row">${startButton}<button type="button" class="alt" id="leaveBtn">${ui('Leave')}</button></div>
+      <div class="status" id="status">${esc(lobby.status || '')}</div><div class="hint">${ui('Only the host can start the match')} · ${n < 2 ? ui("You can also join after the match starts") : n + ui(" players ready")}</div>
     </div>`;
 }
 let lobbyList = null, listBusy = false;
 function lobbyListHTML() {
-  if (listBusy) return '<div class="hint">Odalar aranıyor…</div>';
-  if (!lobbyList) return '<div class="hint">Açık odaları bulmak için Yenile düğmesine bas.</div>';
-  if (!lobbyList.length) return '<div class="hint">Odaya girmek için Hızlı eşleşme düğmesine bas.</div>';
-  return lobbyList.map((l) => `<div class="lobbyrow"><span class="code">${esc(l.code)}</span><span>${esc(l.hostName || 'Oyuncu')} odası</span><span>${l.players}/${l.max}${l.inMatch ? ' · Maç sürüyor' : ''}</span>${l.full ? '<span class="status">Dolu</span>' : `<button type="button" data-join="${esc(l.code)}">Katıl</button>`}</div>`).join('');
+  if (listBusy) return ui("<div class=\"hint\">Looking for rooms…</div>");
+  if (!lobbyList) return ui("<div class=\"hint\">Press Refresh to find public rooms.</div>");
+  if (!lobbyList.length) return ui("<div class=\"hint\">Press Quick play to enter a room.</div>");
+  return lobbyList.map((l) => ui`<div class="lobbyrow"><span class="code">${esc(l.code)}</span><span>${esc(l.hostName || ui("Player"))} room</span><span>${l.players}/${l.max}${l.inMatch ? ui(" · Match in progress") : ''}</span>${l.full ? ui("<span class=\"status\">Full</span>") : ui`<button type="button" data-join="${esc(l.code)}">Join</button>`}</div>`).join('');
 }
 async function refreshLobbies() {
   if (listBusy || net.active) return; listBusy = true; const box = hud.el.panel.querySelector('#lobbyRows'); if (box) box.innerHTML = lobbyListHTML();
   let err = null; try { lobbyList = await net.listLobbies({ name: myName }); } catch (e) { lobbyList = []; err = e; }
-  listBusy = false; const rows = hud.el.panel.querySelector('#lobbyRows'); if (rows) rows.innerHTML = err ? `<div class="hint">Odalar bulunamadı: ${esc(friendlyError(err))}</div>` : lobbyListHTML();
+  listBusy = false; const rows = hud.el.panel.querySelector('#lobbyRows'); if (rows) rows.innerHTML = err ? ui`<div class="hint">Could not find rooms: ${esc(friendlyError(err))}</div>` : lobbyListHTML();
 }
 function wireOnline() {
   const box = hud.el.panel.querySelector('#online'); if (!box) return;
@@ -742,13 +764,13 @@ function wireOnline() {
   const q = (id) => box.querySelector('#' + id); wireName(box);
   if (q('quickBtn')) q('quickBtn').addEventListener('click', () => { lockButtons(box); quickPlay(); });
   if (q('createBtn')) q('createBtn').addEventListener('click', () => { lockButtons(box); createLobby(box.querySelector('input[name=vis]:checked').value === 'public'); });
-  if (q('joinBtn')) { q('joinBtn').addEventListener('click', () => { const c = q('codeBox').value.trim().toUpperCase(); if (!c) { setStatus('Arkadaşının verdiği oda kodunu yaz.'); return; } lockButtons(box); joinLobby(c); }); q('codeBox').addEventListener('keydown', (e) => { if (e.key === 'Enter') q('joinBtn').click(); }); }
+  if (q('joinBtn')) { q('joinBtn').addEventListener('click', () => { const c = q('codeBox').value.trim().toUpperCase(); if (!c) { setStatus(ui("Enter the room code from your friend.")); return; } lockButtons(box); joinLobby(c); }); q('codeBox').addEventListener('keydown', (e) => { if (e.key === 'Enter') q('joinBtn').click(); }); }
   if (q('rejoinBtn')) q('rejoinBtn').addEventListener('click', () => { const c = lobby.rejoinCode; lobby.rejoinCode = null; lockButtons(box); joinLobby(c); });
   if (q('backBtn')) q('backBtn').addEventListener('click', () => { lobby.status = ''; lobby.rejoinCode = null; screen = 'main'; showStart(); });
   if (q('refreshBtn')) { q('refreshBtn').addEventListener('click', () => refreshLobbies()); if (!lobbyList && !listBusy) refreshLobbies(); }
   if (q('lobbyRows')) q('lobbyRows').addEventListener('click', (e) => { const b = e.target.closest('button[data-join]'); if (b) { lockButtons(box); joinLobby(b.dataset.join); } });
   wireMap((k) => { if (net.isHost) { lobby.map = k; broadcastLobby(); } });
-  if (q('startBtn')) q('startBtn').addEventListener('click', () => { if (net.isHost) hostStart(); else { net.send('startreq', {}); setStatus('Oda sahibinden maçı başlatması isteniyor…'); } });
+  if (q('startBtn')) q('startBtn').addEventListener('click', () => { if (net.isHost) hostStart(); });
   if (q('leaveBtn')) q('leaveBtn').addEventListener('click', () => { lobby.rejoinCode = null; leaveOnline(''); });
 }
 function lockButtons(box) { for (const b of box.querySelectorAll('button')) if (b.id !== 'backBtn') b.disabled = true; }
@@ -759,28 +781,32 @@ function showStart() {
   if (game.state === 'lobby') screen = 'lobby';
   const html = screen === 'lobby' ? lobbyHTML() : screen === 'online' ? onlineHTML() : mainHTML();
   hud.showScreen(html);
+  wireAppearance();
   const p = hud.el.panel;
   if (screen === 'main') {
+    const languagePicker = p.querySelector('#languagePicker');
+    for (const event of ['click', 'keydown']) languagePicker.addEventListener(event, e => e.stopPropagation());
+    p.querySelector('#setLanguage').addEventListener('change', e => selectLanguage(e.target.value));
     wireSettings(); wireCheckpoints((w) => beginAtWave(w)); wireMap((k) => { mapKey = k; localStorage.setItem('doodle_map', k); showStart(); });
-    p.querySelector('#soloBtn').addEventListener('click', (e) => { e.stopPropagation(); begin(); });
+    for (const id of ['soloBtn', 'playMapBtn']) p.querySelector('#' + id).addEventListener('click', (e) => { e.stopPropagation(); begin(); });
     p.querySelector('#onlineBtn').addEventListener('click', (e) => { e.stopPropagation(); screen = 'online'; showStart(); });
   } else wireOnline();
 }
 function showPause() {
   if (online()) {
-    hud.showScreen(`<h1>Menü</h1><h2>Herkes tek · Oda ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</h2><div class="scoreboard">${sortedScores().map(([id, s]) => `<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} öldürme · ${s.deaths} ölüm</span></div>`).join('')}</div>${CONTROLS_HTML}${settingsHTML()}<div class="online" id="online"><div class="row"><button type="button" class="alt" id="leaveBtn">Maçtan ayrıl</button></div></div><div class="go">Devam etmek için tıkla veya ${hud.key('confirm')} tuşuna bas</div>`);
+    hud.showScreen(ui`<h1>Menu</h1><h2>Free for all · Lobby ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</h2><div class="scoreboard">${sortedScores().map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}</div>${CONTROLS_HTML}${settingsHTML()}<div class="online" id="online"><div class="row"><button type="button" class="alt" id="leaveBtn">Leave match</button></div></div><div class="go">Click to resume or press ${hud.key('confirm')} </div>`);
     wireSettings(); wireOnline(); return;
   }
-  hud.showScreen(`<h1>Duraklatıldı</h1><h2>${mapName(level.key)} · Dalga ${game.wave} · Skor ${game.score}</h2>${CONTROLS_HTML}${settingsHTML()}${menuBtnHTML()}<div class="go">Devam etmek için tıkla veya ${hud.key('confirm')} tuşuna bas</div>`);
+  hud.showScreen(ui`<h1>Paused</h1><h2>${mapName(level.key)} · Wave ${game.wave} · Score ${game.score}</h2>${CONTROLS_HTML}${settingsHTML()}${menuBtnHTML()}<div class="go">Click to resume or press ${hud.key('confirm')} </div>`);
   wireSettings(); wireMenuBtn();
 }
-function showClickToPlay() { hud.showScreen(`<h1>Maç hazır</h1><h2>Herkes tek · Hedef: ${FFA_TARGET} öldürme</h2><div class="go">Başlamak için tıkla veya ${hud.key('confirm')} tuşuna bas.</div>`); }
+function showClickToPlay() { hud.showScreen(ui`<h1>Match ready</h1><h2>Free for all · Target: ${FFA_TARGET} kills</h2><div class="go">Click to start or press ${hud.key('confirm')} .</div>`); }
 function showDead() {
   hud.setGameplayVisible(false); const nb = game.score > best; if (nb) { best = game.score; localStorage.setItem('doodle_best', String(best)); }
-  hud.showScreen(`<h1>Mürekkebin tükendi</h1><div class="stats"><b>${game.wave}</b> dalga · <b>${game.kills}</b> öldürme · Skor <b>${game.score}</b>${nb ? ' · <b>Yeni rekor</b>' : ` · En iyi skor ${best}`}</div>${checkpointHTML()}${menuBtnHTML()}<div class="go">Tekrar oynamak için tıkla veya ${hud.key('confirm')} tuşuna bas</div>`);
+  hud.showScreen(ui`<h1>Out of ink</h1><div class="stats"><b>${game.wave}</b> wave · <b>${game.kills}</b> kills · Score <b>${game.score}</b>${nb ? ui(" · <b>New record</b>") : ui` · Best score ${best}`}</div>${checkpointHTML()}${menuBtnHTML()}<div class="go">Click to play again or press ${hud.key('confirm')} </div>`);
   wireCheckpoints((w) => beginAtWave(w)); wireMenuBtn();
 }
-function menuBtnHTML() { return '<div class="online menubtn"><div class="row"><button type="button" class="alt" id="menuBtn">Ana menü</button></div></div>'; }
+function menuBtnHTML() { return ui("<div class=\"online menubtn\"><div class=\"row\"><button type=\"button\" class=\"alt\" id=\"menuBtn\">Main menu</button></div></div>"); }
 function wireMenuBtn() { const b = hud.el.panel.querySelector('#menuBtn'); if (b) b.addEventListener('click', (e) => { e.stopPropagation(); toMainMenu(); }); }
 function toMainMenu() { game.state = 'start'; game.mode = 'solo'; game.menu = false; setArena(false); resetGame(); audio.reelLoop(false); input.exitLock(); hud.setGameplayVisible(false); screen = 'main'; showStart(); }
 function toLobbyScreen() { net.inMatch = false; for (const r of remote.values()) r.lastSeen = performance.now(); setArena(true); resetGame(); game.state = 'lobby'; game.over = null; game.menu = false; hud.setGameplayVisible(false); hud.setBoard(null); screen = 'lobby'; showStart(); }
@@ -798,6 +824,7 @@ function begin() { game.mode = 'solo'; setArena(false); beginCommon(); if (game.
 function beginAtWave(n) { game.mode = 'solo'; setArena(false); beginCommon(); resetGame(); startWave(n); game.state = 'play'; }
 function jumpToWave(n) { enemies.clear(); effects.clear(); enemies.mods.speed = 1; enemies.mods.damage = 1; endFocus(); game.intermission = 0; game.queue = []; startWave(n); hud.hideScreen(); hud.setGameplayVisible(true); game.state = 'play'; game.menu = false; audio.reelLoop(false); }
 function hostStart() {
+  if (!net.active || !net.isHost) return;
   scores.clear(); for (const [id, p] of lobby.players) scores.set(id, { name: p.name, kills: 0, deaths: 0 });
   // deal everyone a different spot, shuffled so the same people do not always start together
   setArena(true); const order = spawnSpots().map((_, i) => i); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
@@ -811,8 +838,8 @@ function startMatch(late, spawnIdx) {
   if (!scores.size) for (const [id, p] of lobby.players) scores.set(id, { name: p.name, kills: 0, deaths: 0 });
   const spots = spawnSpots(); player.reset(spawnIdx != null && spots[spawnIdx] ? spots[spawnIdx].clone() : arenaSpawn()); beginCommon(); game.state = 'play'; screen = 'lobby'; player.shieldT = 2;
   if (late) net.broadcast('mine-sync', { map: level.key });
-  refreshScoreHud(); hud.message('Herkes tek', late ? 'Devam eden maça katıldın' : 'Hedef: ' + FFA_TARGET + ' öldürme · ' + Math.round(FFA_TIME / 60) + ' dakika · Herkes rakip', 3);
-  hud.tip(`Skor tablosu: <b>${hud.key('score')}</b> basılı tut.`, 5);
+  refreshScoreHud(); hud.message(ui("Free for all"), late ? ui("Joined a match in progress") : ui("Target: ") + FFA_TARGET + ui(" kills · ") + Math.round(FFA_TIME / 60) + ui(" minutes · Everyone is a rival"), 3);
+  hud.tip(ui`Scoreboard: <b>${hud.key('score')}</b> hold.`, 5);
   // a match started by someone else's click cannot grab the mouse: ask for a click
   setTimeout(() => { if (game.state === 'play' && !input.pointerLocked && !input.usingGamepad) { game.menu = true; showClickToPlay(); } }, 250);
 }
@@ -850,12 +877,12 @@ function step(now) {
   else if ((st === 'play' || (st === 'dying' && online())) && input.pressed('pause')) { if (game.menu) resume(); else { pause(); input.exitLock(); } }
   else if ((st === 'play' || st === 'dying') && game.menu && (input.pressed('jump') || input.pressed('confirm'))) resume();
   st = game.state; const playing = st === 'play' || st === 'dying';
-  if (input.pressed('music')) { musicWanted = !musicWanted; localStorage.setItem('doodle_music', musicWanted ? '1' : '0'); audio.musicOn(musicWanted); hud.tip(musicWanted ? 'Müzik açık' : 'Müzik kapalı', 1.5); }
+  if (input.pressed('music')) { musicWanted = !musicWanted; localStorage.setItem('doodle_music', musicWanted ? '1' : '0'); audio.musicOn(musicWanted); hud.tip(musicWanted ? ui("Music on") : ui("Music off"), 1.5); }
   if (online() && playing) {
     if (input.usingGamepad && input.pressed('score')) boardToggle = !boardToggle;
     const want = ((input.down('score') && !input.usingGamepad) || boardToggle) && !game.menu; if (want !== !hud.el.board.hidden) hud.setBoard(want ? boardHTML() : null);
   } else boardToggle = false;
-  if (st === 'play' && !game.menu && !input.pointerLocked && !input.usingGamepad) { lockTipT -= dt; if (lockTipT <= 0) { lockTipT = 2.5; hud.tip('Oynamak için sahneye tıkla', 2); } }
+  if (st === 'play' && !game.menu && !input.pointerLocked && !input.usingGamepad) { lockTipT -= dt; if (lockTipT <= 0) { lockTipT = 2.5; hud.tip(ui("Click the game to play"), 2); } }
   let scale = 1;
   if (game.hitstopT > 0) { game.hitstopT -= dt; scale = game.hitstopScale; }
   else if (game.focus.active) scale = FOCUS_SCALE;
@@ -875,11 +902,11 @@ function step(now) {
       game.deathT += dt;
       if (online()) {
         const before = Math.ceil(game.respawnT); game.respawnT -= dt; const left = Math.ceil(game.respawnT);
-        if (left > 0) { if (left !== before || game.deathT <= dt) hud.message(String(left), 'Yeniden doğuyorsun', 1.1); }
+        if (left > 0) { if (left !== before || game.deathT <= dt) hud.message(String(left), ui("Respawning"), 1.1); }
         else if (before > 0) { game.respawnArm = input.lastActive; game.promptT = 0; }
         else if (!game.menu) {
           // waiting on a press: any key, button or click brings you back; pause opens the menu instead
-          game.promptT -= dt; if (game.promptT <= 0) { game.promptT = 1.4; hud.message('Hazır', `Yeniden doğmak için tıkla veya ${hud.key('confirm')} tuşuna bas`, 1.5); }
+          game.promptT -= dt; if (game.promptT <= 0) { game.promptT = 1.4; hud.message(ui("Ready"), ui`Click to respawn or press ${hud.key('confirm')} `, 1.5); }
           if (input.lastActive !== game.respawnArm && !input.pressed('pause') && !input.down('pause')) respawnLocal();
         }
       }

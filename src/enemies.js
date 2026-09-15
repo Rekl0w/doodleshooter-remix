@@ -1,3 +1,4 @@
+import { ui } from './i18n.js';
 // Enemies: doodle humanoids (asdf-style stick figures with faces), flyers, bombers, shield bearers and a boss.
 import * as THREE from 'three';
 import { inMeleeArc, blastDamage } from './combat.js';
@@ -13,16 +14,16 @@ const nxOf = (dx, d) => dx / (d || 1), nzOf = (dz, d) => dz / (d || 1);
 export const BOSSES = ['boss', 'eraser', 'inkblot'];
 export const STATE_CODES = { spawn: 0, hunt: 1, stunned: 2, dead: 3 }; export const STATE_NAMES = ['spawn', 'hunt', 'stunned', 'dead'];
 export const TYPES = {
-  grunt: { hp: 100, speed: 5.2, weapon: 'rifle', range: 28, stop: 16, keep: 7, burst: 3, burstInt: 0.15, cool: [1.6, 2.6], dmg: 6, spread: 0.055, pspeed: 36, score: 100, scale: 1.0, name: 'Piyade', hat: 'cap', build: { bodyW: 1, headS: 1, limbR: 0.032 } },
-  rusher: { hp: 70, speed: 7.6, weapon: 'blade', lunge: 2.9, reach: 3.0, standoff: 1.9, cool: [1.0, 1.5], dmg: 15, score: 120, scale: 0.95, name: 'Akıncı', hat: 'band', build: { bodyW: 0.82, headS: 0.95, limbR: 0.027 } },
-  heavy: { hp: 320, speed: 3.0, weapon: 'shotgun', range: 18, stop: 9, keep: 5, pellets: 7, cool: [2.4, 3.2], dmg: 5, spread: 0.13, pspeed: 32, score: 260, scale: 1.25, name: 'Ağır asker', hat: 'helmet', build: { bodyW: 1.55, headS: 0.88, limbR: 0.05 } },
-  sniper: { hp: 60, speed: 3.6, weapon: 'sniper', range: 90, stop: 90, keep: 15, aimTime: 1.7, cool: [2.8, 3.8], dmg: 22, spread: 0.006, pspeed: 95, score: 180, scale: 1.05, name: 'Nişancı', stationary: true, hat: 'hood', build: { bodyW: 0.78, headS: 0.92, limbR: 0.026 } },
-  shield: { hp: 150, speed: 3.8, weapon: 'pistol', range: 20, stop: 8, keep: 4, burst: 2, burstInt: 0.2, cool: [1.8, 2.6], dmg: 5, spread: 0.06, pspeed: 34, score: 200, scale: 1.05, name: 'Kalkanlı', hat: 'helmet', shield: true, build: { bodyW: 1.2, headS: 0.9, limbR: 0.042 } },
-  bomber: { hp: 26, speed: 6.5, weapon: 'bomb', fuseRange: 3.4, fuse: 1.05, blast: 4.2, dmg: 24, score: 150, scale: 0.9, name: 'Canlı bomba', ink: INK.BLACK, model: 'bomber' },
-  flyer: { hp: 40, speed: 6.2, weapon: 'dive', dmg: 10, cool: [2.8, 4.2], score: 140, scale: 1.5, name: 'Kâğıt arısı', flying: true, model: 'flyer' },
-  boss: { hp: 2600, speed: 3.2, weapon: 'boss', bossKind: 'doodler', range: 32, stop: 6, keep: 0, cool: [2.6, 3.6], dmg: 22, score: 2500, scale: 2.7, name: 'Karalayıcı', boss: true, ink: INK.BLACK, hat: 'crown', build: { bodyW: 1.35, headS: 1.15, limbR: 0.06 } },
-  eraser: { hp: 3400, speed: 4.2, weapon: 'boss', bossKind: 'eraser', range: 30, stop: 8, keep: 0, cool: [2.2, 3.2], dmg: 26, score: 3200, scale: 2.6, name: 'Silgi', boss: true, ink: INK.PINK, model: 'blob', build: {} },
-  inkblot: { hp: 3000, speed: 3.0, weapon: 'boss', bossKind: 'inkblot', range: 34, stop: 10, keep: 0, cool: [2.4, 3.4], dmg: 20, score: 3600, scale: 2.4, name: 'Mürekkep Lekesi', boss: true, ink: INK.BLACK, model: 'blob', build: {} },
+  grunt: { hp: 100, speed: 5.2, weapon: 'rifle', range: 28, stop: 16, keep: 7, burst: 3, burstInt: 0.15, cool: [1.6, 2.6], dmg: 6, spread: 0.055, pspeed: 36, score: 100, scale: 1.0, name: ui("Grunt"), hat: 'cap', build: { bodyW: 1, headS: 1, limbR: 0.032 } },
+  rusher: { hp: 70, speed: 7.6, weapon: 'blade', lunge: 2.9, reach: 3.0, standoff: 1.9, cool: [1.0, 1.5], dmg: 15, score: 120, scale: 0.95, name: ui("Rusher"), hat: 'band', build: { bodyW: 0.82, headS: 0.95, limbR: 0.027 } },
+  heavy: { hp: 320, speed: 3.0, weapon: 'shotgun', range: 18, stop: 9, keep: 5, pellets: 7, cool: [2.4, 3.2], dmg: 5, spread: 0.13, pspeed: 32, score: 260, scale: 1.25, name: ui("Heavy"), hat: 'helmet', build: { bodyW: 1.55, headS: 0.88, limbR: 0.05 } },
+  sniper: { hp: 60, speed: 3.6, weapon: 'sniper', range: 90, stop: 90, keep: 15, aimTime: 1.7, cool: [2.8, 3.8], dmg: 22, spread: 0.006, pspeed: 95, score: 180, scale: 1.05, name: ui("Sniper"), stationary: true, hat: 'hood', build: { bodyW: 0.78, headS: 0.92, limbR: 0.026 } },
+  shield: { hp: 150, speed: 3.8, weapon: 'pistol', range: 20, stop: 8, keep: 4, burst: 2, burstInt: 0.2, cool: [1.8, 2.6], dmg: 5, spread: 0.06, pspeed: 34, score: 200, scale: 1.05, name: ui("Shield bearer"), hat: 'helmet', shield: true, build: { bodyW: 1.2, headS: 0.9, limbR: 0.042 } },
+  bomber: { hp: 26, speed: 6.5, weapon: 'bomb', fuseRange: 3.4, fuse: 1.05, blast: 4.2, dmg: 24, score: 150, scale: 0.9, name: ui("Bomber"), ink: INK.BLACK, model: 'bomber' },
+  flyer: { hp: 40, speed: 6.2, weapon: 'dive', dmg: 10, cool: [2.8, 4.2], score: 140, scale: 1.5, name: ui("Paper wasp"), flying: true, model: 'flyer' },
+  boss: { hp: 2600, speed: 3.2, weapon: 'boss', bossKind: 'doodler', range: 32, stop: 6, keep: 0, cool: [2.6, 3.6], dmg: 22, score: 2500, scale: 2.7, name: ui("Doodler"), boss: true, ink: INK.BLACK, hat: 'crown', build: { bodyW: 1.35, headS: 1.15, limbR: 0.06 } },
+  eraser: { hp: 3400, speed: 4.2, weapon: 'boss', bossKind: 'eraser', range: 30, stop: 8, keep: 0, cool: [2.2, 3.2], dmg: 26, score: 3200, scale: 2.6, name: ui("Eraser"), boss: true, ink: INK.PINK, model: 'blob', build: {} },
+  inkblot: { hp: 3000, speed: 3.0, weapon: 'boss', bossKind: 'inkblot', range: 34, stop: 10, keep: 0, cool: [2.4, 3.4], dmg: 20, score: 3600, scale: 2.4, name: ui("Inkblot"), boss: true, ink: INK.BLACK, model: 'blob', build: {} },
 };
 
 // ---------------- doodle model kit ----------------
@@ -353,7 +354,7 @@ export class EnemyManager {
   _breakShield(e) {
     const g = e.J.shieldG; if (!g || !g.parent) return; g.updateWorldMatrix(true, false); this.ctx.scene.attach(g);
     this.ctx.effects.debris(g, g.position, new THREE.Vector3(rand(-3, 3), 4, rand(-3, 3)), new THREE.Vector3(rand(-6, 6), rand(-6, 6), rand(-6, 6)), { radius: 0.4, blood: false, life: 8 });
-    e.hit = e.hit.filter((h) => h[0] !== 'shield'); e.hitSpheres = e.hit.map(() => new THREE.Vector3()); e.J.shieldG = null; audio.shieldHit(e.center); this.ctx.game.addScore(40, '护盾击碎');
+    e.hit = e.hit.filter((h) => h[0] !== 'shield'); e.hitSpheres = e.hit.map(() => new THREE.Vector3()); e.J.shieldG = null; audio.shieldHit(e.center); this.ctx.game.addScore(40, ui("Shield broken"));
   }
   kill(e, info) {
     e.alive = false; e.state = 'dead'; e.deadT = 0; this.alive--; e.body.vel.set(0, 0, 0); this._removeLaser(e);
