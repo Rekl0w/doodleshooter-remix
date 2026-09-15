@@ -21,6 +21,8 @@ This is a community remix of **[DoodleShooter by iifor](https://github.com/iifor
 - **Solo resupply:** improved ammo drops, katana kill rewards, and unlimited revolver reserve ammo.
 - **English by default, optional Turkish:** use **Language / Dil** in the main menu. Your choice is saved locally; changing language reloads the menu. Players using different languages can share the same lobby.
 - **Two visual styles on every map:** after selecting a map, choose **Lined notebook** or **Solid colors**. Solid mode removes paper lines, crosshatching, and outline wobble. Your preference is saved per map and only affects your own view, including online games.
+- **Online feedback:** hit markers confirm damage accepted by the target, with clear spawn-protection feedback. Player names follow visible opponents and stay hidden behind cover.
+- **Respawning:** after the countdown, click **Respawn** or press Space / Enter. Mouse movement and held buttons do not respawn you accidentally.
 - Mouse sensitivity, inverted look, music settings, map previews, and gamepad support.
 - Fixes for repeated wall jumping, weapon poses, reload states, and leaving map boundaries.
 
@@ -29,7 +31,7 @@ This is a community remix of **[DoodleShooter by iifor](https://github.com/iifor
 | Action | Input |
 | --- | --- |
 | Move / look | WASD / mouse |
-| Sprint / slide | Shift / C or Ctrl |
+| Sprint / slide | Shift / C |
 | Fire / slash | Left mouse button |
 | Aim / block with katana | Right mouse button |
 | Jump / leap off the rope | Space |
@@ -42,6 +44,8 @@ This is a community remix of **[DoodleShooter by iifor](https://github.com/iifor
 | Scope zoom | Mouse wheel or + / − while aiming |
 | Scoreboard | Tab |
 | Menu / music | Esc / M |
+
+C is the crouch/slide key; Ctrl is reserved for browser shortcuts. Leaving or reloading an active game asks for confirmation to protect against accidental tab closure.
 
 Use the wheel to reach M249 and DMR. E does not reel in the rope. Gamepad bindings are listed in the in-game **Controls** section.
 
@@ -79,7 +83,7 @@ After the map is selected, each player can choose their own visual style below t
 
 Up to **10 players**, with a target of **20 kills**. Joining a match already in progress is supported. Use **Quick play** to find public rooms.
 
-PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v9` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
+PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v10` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
 
 ## Run locally
 
@@ -124,11 +128,12 @@ node tests/dust2.mjs
 node tests/ui.mjs
 node tests/appearance.mjs
 node tests/online.mjs
+node tests/multiplayer-regression.mjs
 ```
 
 On Windows, tests use installed Microsoft Edge. Set `GAME_URL` to use another server, or `PLAYWRIGHT_MODULE` to point to an existing Playwright installation. UI and online tests create private rooms and require internet access. Run browser suites sequentially.
 
-Coverage includes movement, ammo, damage, map loading, safe spawns, bot paths, scopes, dual pistols, Dust traversal and boundaries, English/Turkish persistence, lobby card styles, host-only match starts, and real two-client WebRTC synchronization.
+Coverage includes movement, ammo, damage, map loading, safe spawns, bot paths, scopes, dual pistols, Dust traversal and boundaries, English/Turkish persistence, lobby card styles, host-only match starts, real two-client WebRTC synchronization, and three-client respawn / hit-acknowledgement / nameplate regressions.
 
 ## Technology and contributions
 

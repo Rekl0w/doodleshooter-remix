@@ -24,6 +24,10 @@ export class HUD {
       <div class="message"><div class="msg-main" id="msg"></div><div class="msg-sub" id="msgsub"></div></div>
       <div class="killfeed" id="killfeed"></div>
       <div class="screen" id="screen"><div class="panel" id="panel"></div></div>`;
+    this.respawn = document.createElement('div'); this.respawn.className = 'respawn'; this.respawn.hidden = true;
+    this.respawnButton = document.createElement('button'); this.respawnButton.id = 'respawnBtn'; this.respawnButton.type = 'button';
+    this.respawnHint = document.createElement('small'); this.respawn.append(this.respawnButton, this.respawnHint); root.append(this.respawn);
+    this.respawnButton.addEventListener('click', () => this.onRespawn?.());
     const q = (id) => root.querySelector('#' + id);
     this.el = { crosshair: q('crosshair'), gret: q('gret'), hitmarker: q('hitmarker'), dmg: q('dmg'), score: q('score'), combo: q('combo'), wave: q('wave'), modifier: q('modifier'), left: q('left'), timer: q('timer'), hpfill: q('hpfill'), hpnum: q('hpnum'), mag: q('mag'), reserve: q('reserve'), reloading: q('reloading'), tally: q('tally'), weapon: q('weapon'), hint: q('hint'), supportstatus: q('supportstatus'), slots: q('slots'), tip: q('tip'), msg: q('msg'), msgsub: q('msgsub'), killfeed: q('killfeed'), screen: q('screen'), panel: q('panel'), nades: q('nades'), scope: q('scope'), focusmark: q('focusmark'), focusmeter: q('focusmeter'), fmfill: q('fmfill'), bossbar: q('bossbar'), bossname: q('bossname'), bossfill: q('bossfill'), pvpscore: q('pvpscore'), board: q('board'), gstam: q('gstam'), gstamfill: q('gstamfill') };
     this._msgT = 0; this._scope = false; this._nades = -1; this._pad = false; this.onDevice = null; this._fmShow = false; this._fmFrac = -1; this._fmReady = false; this._lastTally = -1; this._lastSlots = ''; this._ads = false; this._mode = ''; this.onScreenClick = null; this._tipT = 0;
@@ -43,7 +47,16 @@ export class HUD {
   // control labels follow whatever you touched last
   setDevice(pad) { if (pad === this._pad) return; this._pad = pad; this.root.classList.toggle('pad', pad); if (this.onDevice) this.onDevice(pad); }
   key(action) { return (this._pad ? PAD_KEYS : KB_KEYS)[action] || action; }
-  setScope(on, zoom = 1) { if (on !== this._scope) { this._scope = on; this.el.scope.classList.toggle('on', on); } if (on) this.el.scope.querySelector('#scopeinfo').textContent = ui`${zoom}× · ${this._pad ? ui("D-pad") : ui("Wheel / + −")}: zoom`; }
+  setRespawn(left = null) {
+    this.respawn.hidden = left == null;
+    if (left == null) return;
+    this.respawnButton.disabled = left > 0;
+    const label = left > 0 ? ui`Respawn in ${Math.ceil(left)}` : ui('Respawn');
+    if (this.respawnButton.textContent !== label) this.respawnButton.textContent = label;
+    this.respawnHint.textContent = ui`Click or press ${this.key('confirm')} / Enter`;
+  }
+  clearMessage() { this._msgT = 0; this.el.msg.classList.remove('show'); this.el.msgsub.textContent = ''; }
+  setScope(on, zoom = 1) { if (on !== this._scope) { this._scope = on; this.el.scope.classList.toggle('on', on); this.root.classList.toggle('scoped', on); } if (on) this.el.scope.querySelector('#scopeinfo').textContent = ui`${zoom}× · ${this._pad ? ui("D-pad") : ui("Wheel / + −")}: zoom`; }
   setFocusMark(x, y) {
     const m = this.el.focusmark;
     if (x == null) { m.classList.remove('on'); return; }
@@ -105,7 +118,7 @@ export const CONTROLS_HTML = ui`
     <div><b>WASD</b> Move &nbsp; <b>Mouse</b> Look &nbsp; <b>Shift</b> Sprint</div>
     <div><b>LMB</b> Fire / slash &nbsp; <b>RMB</b> Aim / block</div>
     <div><b>Space</b> Jump · Press again to double jump</div>
-    <div><b>C / Ctrl</b> Slide · Dash in the air</div>
+    <div><b>C</b> Slide · Dash in the air</div>
     <div><b>Hold Q</b> Grapple and reel in · Release to detach</div>
     <div><b>Release Q</b> Detach &nbsp; <b>Space</b> Leap off the rope</div>
     <div><b>F</b> Quick slash &nbsp; <b>R</b> Reload &nbsp; <b>M</b> Music</div>

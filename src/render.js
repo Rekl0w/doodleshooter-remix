@@ -281,7 +281,11 @@ export class InkRenderer {
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
     const u = this.post.uniforms; u.uRes.value.set(rw, rh); u.uAspect.value = w / h; u.uLineSpacing.value = rh / 13.5;
   }
-  setAppearance(mode) { this.post.uniforms.uSolid.value = mode === 'solid' ? 1 : 0; }
+  setAppearance(mode) {
+    this.post.uniforms.uSolid.value = mode === 'solid' ? 1 : 0;
+    document.documentElement.dataset.appearance = mode;
+    document.documentElement.dataset.palette = this.post.uniforms.uDesert.value ? 'desert' : 'landscape';
+  }
   render(time, fx = {}) {
     shared.uTime.value = time;
     this.camera.updateMatrixWorld(); this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();

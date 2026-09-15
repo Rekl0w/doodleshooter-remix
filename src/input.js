@@ -3,7 +3,7 @@ import { clamp } from './util.js';
 
 const KEYMAP = {
   KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right',
-  Space: 'jump', ShiftLeft: 'sprint', ShiftRight: 'sprint', ControlLeft: 'crouch', KeyC: 'crouch',
+  Space: 'jump', ShiftLeft: 'sprint', ShiftRight: 'sprint', KeyC: 'crouch',
   KeyR: 'reload', KeyQ: 'grapple', KeyB: 'mine', Equal: 'zoomIn', Minus: 'zoomOut', Digit7: 'slot7', Digit8: 'slot8', Digit9: 'slot9', Digit0: 'slot10', KeyF: 'melee', KeyV: 'melee', Digit6: 'slot6',
   Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', Digit4: 'slot4', Digit5: 'slot5', Escape: 'pause', KeyP: 'pause', Enter: 'confirm', KeyG: 'grenade', KeyX: 'dash', AltLeft: 'dash', KeyM: 'music', KeyT: 'talk', Tab: 'score',
 };
@@ -15,7 +15,7 @@ export class Input {
   constructor(canvas) {
     this.canvas = canvas;
     this.state = {}; this.prev = {}; this.frameState = {};
-    this.keys = {}; this.mouseBtns = {}; this.pendingActions = new Set();
+    this.keys = {}; this.mouseBtns = {}; this.pendingActions = new Set(); this.blockedActions = new Set();
     this.move = { x: 0, y: 0 };
     this.look = { x: 0, y: 0 };
     this.mx = 0; this.my = 0; this.wheel = 0;
@@ -27,6 +27,11 @@ export class Input {
 
     window.addEventListener('keydown', (e) => {
       if (e.target.closest?.('.screen.show') && e.target.closest('input, button, textarea, select, summary, a')) return;
+      // Browser/system shortcuts must not become in-game movement or weapon actions.
+      if (e.ctrlKey || e.metaKey) {
+        if (this.pointerLocked && e.cancelable) e.preventDefault();
+        return;
+      }
       if (e.repeat) return;
       this.lastActive = performance.now(); const a = KEYMAP[e.code]; if (a) { this.keys[a] = true; this.pendingActions.add(a); if (this.usingGamepad && this.onDeviceChange) this.onDeviceChange(false); this.usingGamepad = false; }
       if (!e.shiftKey) this.keys.sprint = false;
@@ -45,7 +50,7 @@ export class Input {
       this.mx += dx; this.my += dy; this.usingGamepad = false; this.lastActive = performance.now();
     });
     document.addEventListener('mousedown', (e) => {
-      if (e.target.closest?.('.screen.show .panel')) return;
+      if (e.target.closest?.('.screen.show .panel, .respawn')) return;
       const a = MOUSEMAP[e.button]; if (a) { this.mouseBtns[a] = true; this.pendingActions.add(a); }
       if (this.usingGamepad && this.onDeviceChange) this.onDeviceChange(false);
       this.usingGamepad = false; this.anyInput = true; this.lastActive = performance.now();
@@ -122,11 +127,18 @@ export class Input {
     } else this._pad = null;
     this.padPrev = this.padState; this.padState = padS;
 
+    for (const action of this.blockedActions) {
+      if (!this.keys[action] && !this.mouseBtns[action] && !padS[action]) this.blockedActions.delete(action);
+      delete s[action]; delete padS[action];
+    }
     const ml = Math.hypot(mx, my); if (ml > 1) { mx /= ml; my /= ml; }
     this.move.x = mx; this.move.y = my;
     this.look.x = lx; this.look.y = this.invertY ? -ly : ly;
   }
 
+  suppressUntilRelease(actions) {
+    for (const action of actions) { this.blockedActions.add(action); this.pendingActions.delete(action); delete this.state[action]; delete this.padState[action]; }
+  }
   down(a) { return !!this.state[a]; }
   get idleSeconds() { return (performance.now() - this.lastActive) / 1000; }
   pressed(a) { return (!!this.state[a] && !this.prev[a]) || (!!this.padState[a] && !this.padPrev[a]); }

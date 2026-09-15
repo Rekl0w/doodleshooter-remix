@@ -17,9 +17,12 @@ const HIT = [['head', 0.3], ['torso', 0.33], ['hips', 0.2], ['armL', 0.11], ['ar
 export function encodeLocal(P, weaponIndex, extra = {}) {
   const b = P.body; const g = P.grapple; const grappling = g && g.state !== 'idle';
   const out = [+b.pos.x.toFixed(2), +b.pos.y.toFixed(2), +b.pos.z.toFixed(2), +P.yaw.toFixed(2), +P.pitch.toFixed(2), weaponIndex,
-    (P.crouching ? 1 : 0) | (P.sliding ? 2 : 0) | (P.isBlocking ? 4 : 0) | (P._aiming ? 8 : 0) | (b.onGround ? 16 : 0) | (extra.firing ? 32 : 0) | (P.alive ? 64 : 0) | (grappling ? 128 : 0) | (P.parryWindow ? 256 : 0) | (extra.idle ? 512 : 0) | (extra.untouched ? 1024 : 0) | (extra.away ? 2048 : 0),
+    (P.crouching ? 1 : 0) | (P.sliding ? 2 : 0) | (P.isBlocking ? 4 : 0) | (P._aiming ? 8 : 0) | (b.onGround ? 16 : 0) | (extra.firing ? 32 : 0) | (P.alive ? 64 : 0) | (grappling ? 128 : 0) | (P.parryWindow ? 256 : 0) | (extra.idle ? 512 : 0) | (extra.untouched ? 1024 : 0) | (extra.away ? 2048 : 0) | (P.shieldT > 0 ? 4096 : 0),
     Math.round(P.hp), +b.vel.x.toFixed(1), +b.vel.y.toFixed(1), +b.vel.z.toFixed(1)];
   if (grappling) out.push(+g.hook.x.toFixed(1), +g.hook.y.toFixed(1), +g.hook.z.toFixed(1));
+  // Keep grapple slots fixed so every snapshot carries its respawn generation.
+  while (out.length < 14) out.push(0);
+  out.push(P.lifeId || 0);
   return out;
 }
 
@@ -44,16 +47,14 @@ export class RemotePlayer {
     this.root = model.root; this.parts = model.parts; this.J = model.J; this.face = model.face;
     this.leftGun = null;
     this.root.visible = false; this.ctx.scene.add(this.root); this.weaponIndex = -1;
-    // a name tag: a little flag above the head so you know who is who
-    this.tagG = new THREE.Group(); this.root.add(this.tagG); this.tagG.position.y = 2.25;
-    const flag = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.28, 0.02), makeInkMaterial({ ink: this.ink, fill: true, side: THREE.DoubleSide })); this.tagG.add(flag);
+
     this.corpse = false;
   }
   // knocked flat with some physics: the whole figure tumbles away as debris (bits come off on a
   // big hit), and a fresh figure is drawn when the player comes back
   ragdoll(dir, over) {
     if (this.corpse) return; this.corpse = true; const eff = this.ctx.effects, scene = this.ctx.scene, J = this.J;
-    this.tagG.visible = false; this.rope.visible = false; this.hook.visible = false;
+    this.alive = false; this.rope.visible = false; this.hook.visible = false;
     const d = (dir && dir.lengthSq() > 0.01 ? dir.clone() : new THREE.Vector3(0, 0.4, -1)).normalize();
     const detach = (obj, extraVel, radius) => { if (!obj || !obj.parent) return; obj.updateWorldMatrix(true, false); scene.attach(obj); _v.copy(d).multiplyScalar(4 + Math.random() * 4).add(extraVel); _v.y += 2 + Math.random() * 3; eff.debris(obj, obj.position, _v, new THREE.Vector3((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16), { radius, blood: true, life: 7 + Math.random() * 3 }); };
     if (over) { detach(J.headG, _v2.set((Math.random() - 0.5) * 4, 3, (Math.random() - 0.5) * 4), 0.25); if (Math.random() < 0.5) detach(Math.random() < 0.5 ? J.armL : J.armR, _v2.set((Math.random() - 0.5) * 6, 2, (Math.random() - 0.5) * 6), 0.12); }
@@ -81,7 +82,7 @@ export class RemotePlayer {
     if (!snap) return;
     this.snapA = this.snapB || { p: new THREE.Vector3(snap[0], snap[1], snap[2]), yaw: snap[3], pitch: snap[4], t: t - 0.07 };
     this.snapB = { p: new THREE.Vector3(snap[0], snap[1], snap[2]), yaw: snap[3], pitch: snap[4], t };
-    this.setWeapon(snap[5]); const f = snap[6];
+    const f = snap[6]; this.lifeId = snap[14] || 0; this.protected = !!(f & 4096);
     this.crouching = !!(f & 1); this.sliding = !!(f & 2); this.blocking = !!(f & 4); this.aiming = !!(f & 8); this.body.onGround = !!(f & 16); this.firing = !!(f & 32);
     const wasAlive = this.alive; this.alive = !!(f & 64); this.hp = snap[7];
     if (snap.length > 10) this.vel.set(snap[8], snap[9], snap[10]); else this.vel.set(0, 0, 0);
@@ -90,6 +91,7 @@ export class RemotePlayer {
     if (this.alive && this.corpse) { this._buildModel(); this.snapA = null; this.body.pos.copy(this.snapB.p); }
     if (this.root && !this.root.visible && !this.away) { this.body.pos.copy(this.snapB.p); this.root.visible = true; }
     if (this.root && this.away) this.root.visible = false;
+    if (this.root && this.alive) this.setWeapon(snap[5]);
   }
   // damage dealt to this player by the host's bots or by another player's shot goes to its owner
   takeDamage(amount, fromPos) { if (this.onDamage) this.onDamage(this, amount, fromPos); }
@@ -159,7 +161,7 @@ export class RemotePlayer {
     J.headG.rotation.x = clamp(-this.pitch, -0.7, 0.7) * 0.7;
     if (this.leftGun?.visible) { J.armL.rotation.y = 0; J.armL.rotation.z = .12; J.foreL.rotation.x = -.2; J.torso.rotation.y = 0; aimWeaponProp(this.leftGun, this.forward); }
     if (!blade) aimWeaponProp(J.gun, this.forward);
-    this.tagG.rotation.y = -this.root.rotation.y + (this.ctx.player ? Math.atan2(this.ctx.player.eye.x - this.body.pos.x, this.ctx.player.eye.z - this.body.pos.z) : 0);
+
   }
   dispose() { if (this.root) this.ctx.scene.remove(this.root); this.ctx.scene.remove(this.rope); this.ctx.scene.remove(this.hook); }
 }

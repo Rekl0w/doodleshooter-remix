@@ -108,12 +108,12 @@ canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; display: bloc
 /* sniper scope */
 .scope { position: absolute; inset: 0; opacity: 0; transition: opacity .1s; pointer-events: none; }
 .scope.on { opacity: 1; }
-.scope .mask { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, rgba(246,243,230,0) 0 30vh, var(--paper) 30.6vh 100%); }
+.scope .mask { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, rgba(246,243,230,0) 0 30vh, var(--scope-mask, var(--paper)) 30.6vh 100%); }
 .scope .ring { position: absolute; left: 50%; top: 50%; width: 60.5vh; height: 60.5vh; margin: -30.25vh; border: 3.5px solid var(--ink); border-radius: 50%; box-shadow: inset 0 0 0 7px rgba(26,48,192,.12); }
 .scope .cx { position: absolute; left: 50%; top: 50%; width: 60vh; height: 2.5px; margin: -1px -30vh; background: repeating-linear-gradient(90deg, var(--ink) 0 14px, transparent 14px 17px); }
 .scope .cy { position: absolute; left: 50%; top: 50%; width: 2.5px; height: 60vh; margin: -30vh -1px; background: repeating-linear-gradient(180deg, var(--ink) 0 14px, transparent 14px 17px); }
 .scope .dot { position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px; background: var(--red); border-radius: 50%; }
-.scope-info { position: absolute; top: calc(50% + 32vh); left: 50%; transform: translateX(-50%); padding: 5px 14px; color: var(--ink); background: var(--paper); border-radius: 8px; font-size: 19px; white-space: nowrap; }
+.scope-info { position: absolute; top: calc(50% + 32vh); left: 50%; transform: translateX(-50%); padding: 5px 14px; color: var(--ink); background: var(--scope-mask, var(--paper)); color: var(--scope-ink, var(--ink)); border-radius: 8px; font-size: 19px; white-space: nowrap; }
 /* focus-slash target marker */
 .focus-mark { position: absolute; left: 0; top: 0; width: 0; height: 0; opacity: 0; transition: opacity .1s; }
 .focus-mark.on { opacity: 1; animation: fm .5s ease-in-out infinite alternate; }
@@ -279,3 +279,17 @@ html[lang="tr"] .online .plist .host span:first-child::after { content: ' · oda
 .lobbyrow { display: grid; grid-template-columns: 96px 1fr auto auto; gap: 12px; align-items: center; font-size: 19px; padding: 3px 8px; border-bottom: 1.5px solid rgba(26,48,192,.2); }
 .lobbyrow .code { font-size: 22px; letter-spacing: 3px; padding: 0 8px; border-width: 2px; }
 .lobbyrow button { font-size: 18px; padding: 3px 12px; }
+
+/* Scope surroundings follow the selected surface palette. */
+:root[data-appearance="solid"] { --scope-mask: #aebcb3; --scope-ink: #243b30; }
+:root[data-appearance="solid"][data-palette="desert"] { --scope-mask: #c4ad86; --scope-ink: #493921; }
+.respawn { position: absolute; z-index: 5; left: 50%; top: 64%; transform: translateX(-50%); text-align: center; }
+.respawn button { pointer-events: auto; font: inherit; font-size: 24px; color: var(--scope-ink, var(--paper)); background: var(--scope-mask, var(--ink)); border: 2px solid currentColor; border-radius: 9px; padding: 10px 26px; cursor: pointer; }
+.respawn button:disabled { opacity: .75; cursor: wait; }
+.respawn small { display: block; margin-top: 7px; padding: 3px 8px; border-radius: 5px; color: #fff; background: #162421d9; }
+.nameplates { position: absolute; inset: 0; pointer-events: none; }
+.player-name { position: absolute; left: 0; top: 0; max-width: 180px; padding: 2px 8px; border: 1px solid #c53e35; border-radius: 5px; background: #fff5e9eb; color: #74251f; font: 600 14px/1.3 system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player-name.protected { border-color: #458fbe; color: #245a7d; }
+#hud.nogame .nameplates, #hud.nogame .respawn { display: none; }
+
+#hud.scoped .nameplates { clip-path: circle(30vh at 50% 50%); }
