@@ -10,7 +10,7 @@ import { ui } from './i18n.js';
 
 // a local dev server gets its own namespace so testing can never wander into a live lobby
 const LOCAL = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
-const PREFIX = LOCAL ? 'doodle-remix-dev-v10-' : 'doodle-remix-v10-';
+const PREFIX = LOCAL ? 'doodle-remix-dev-v11-' : 'doodle-remix-v11-';
 const PUBLIC_SLOTS = 16;
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const makeCode = () => Array.from({ length: 5 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
@@ -22,8 +22,11 @@ const idFromError = (err) => { const m = /peer\s+(\S+)/.exec(String(err && err.m
 
 export class Net {
   constructor() {
+    const newClientId = () => globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    try { this.clientId = localStorage.getItem('doodle_client_id') || newClientId(); localStorage.setItem('doodle_client_id', this.clientId); } catch { this.clientId = newClientId(); }
     this.peer = null; this.conns = new Map(); this.isHost = false; this.id = null; this.code = null; this.hostId = null;
     this.handlers = new Map(); this.connected = false; this.onPeerJoin = null; this.onPeerLeave = null; this.onDisconnect = null;
+    this.bannedPeers = new Set(); this.bannedClients = new Set(); this.ingressRates = new Map(); this.onIngress = null;
     this.maxPlayers = 10; this.accepting = true; this.hostName = ''; this.stats = { sent: 0, recv: 0 }; this.isPublic = false;
   }
   get active() { return !!this.peer && this.connected; }
@@ -46,17 +49,32 @@ export class Net {
     conn.on('error', () => this._drop(conn.peer));
   }
   _drop(pid) {
-    if (this.leaving || !this.conns.has(pid)) return; this.conns.delete(pid);
+    if (this.leaving || !this.conns.has(pid)) return; this.conns.delete(pid); this.ingressRates.delete(pid);
     if (this.isHost) { if (this.onPeerLeave) this.onPeerLeave(pid); this.broadcast('leave', { id: pid }); }
     else if (pid === this.hostId) { this.connected = false; if (this.onDisconnect) this.onDisconnect(); }
   }
   _route(msg, from) {
+    if (!msg || typeof msg.t !== 'string' || !msg.d || typeof msg.d !== 'object') return;
+    if (this.isHost && (!this.conns.has(from) || this.bannedPeers.has(from))) return;
+    if (!this.isHost && from !== this.hostId) return;
+    if (JSON.stringify(msg).length > 16384) return;
+    if (this.isHost) {
+      const now = performance.now(), previous = this.ingressRates.get(from) || { t: now, tokens: 320 };
+      previous.tokens = Math.min(320, previous.tokens + (now - previous.t) * .16); previous.t = now;
+      this.ingressRates.set(from, previous); if (previous.tokens < 1) return; previous.tokens--;
+    }
+    if (['pdmg', 'phit', 'pdead'].includes(msg.t)) return; // obsolete client-authoritative combat
+
     // Match/lobby authority belongs to the connected host. Do this before
     // forwarding, so a guest cannot relay or spoof a host control message.
-    if (['start', 'startreq', 'lobby', 'end', 'backtolobby', 'kick', 'score', 'clock'].includes(msg.t)) {
+    if (['start', 'startreq', 'lobby', 'end', 'backtolobby', 'kick', 'score', 'clock', 'leave', 'pickup', 'taken', 'feed', 'combat-state', 'combat-death', 'combat-result', 'cut', 'parry', 'refused', 'scene-pong'].includes(msg.t)) {
       if (this.isHost || from !== this.hostId || (msg.from && msg.from !== this.hostId)) return;
     }
-    if (this.isHost) msg = { ...msg, from };
+    if (this.isHost) {
+      msg = { ...msg, from };
+      if (this.onIngress) { msg = this.onIngress(msg, from); if (!msg) return; }
+      if (msg.t.startsWith('combat-')) { this._emit(msg.t, msg.d, from); return; }
+    }
     // clients can address each other; the host forwards those
     if (this.isHost && msg.to && msg.to !== this.id) { const c = this.conns.get(msg.to); if (c && c.open) c.send(msg); return; }
     if (this.isHost && msg.relay) { for (const [pid, c] of this.conns) if (pid !== from && c.open) c.send({ t: msg.t, d: msg.d, from }); }
@@ -66,7 +84,7 @@ export class Net {
 
   // ---- lobby creation / joining ----
   async host({ isPublic = false, code = null } = {}) {
-    this.leave(); this.isHost = true; this.isPublic = isPublic;
+    this.leave(); if (!code) { this.bannedPeers.clear(); this.bannedClients.clear(); } this.isHost = true; this.isPublic = isPublic;
     if (code) { this.code = String(code).toUpperCase(); this.peer = await this._newPeer(PREFIX + this.code); }
     else if (isPublic) {
       for (let slot = 0; slot < PUBLIC_SLOTS; slot++) {
@@ -87,9 +105,12 @@ export class Net {
   // someone knocking: a quick-play probe is told how full we are and only seated once it says it is staying
   _incoming(conn) {
     conn.on('open', () => {
+      if (this.bannedPeers.has(conn.peer) || (conn.metadata?.clientId && this.bannedClients.has(conn.metadata.clientId))) {
+        conn.send({ t: 'refused', d: { reason: 'removed from this room' } }); setTimeout(() => conn.close(), 200); return;
+      }
       // a full lobby still says who it is, so the lobby list can show it
       if (!this.accepting || this.conns.size >= this.maxPlayers - 1) { conn.send({ t: 'refused', d: { reason: this.accepting ? 'that lobby is full' : 'that lobby is closed', code: this.aliasCode || this.code, players: this.conns.size + 1, max: this.maxPlayers, inMatch: !!this.inMatch, hostName: this.hostName } }); setTimeout(() => { try { conn.close(); } catch (e) { /* ignore */ } }, 600); return; }
-      const seat = () => { if (this.conns.has(conn.peer)) return; this.conns.set(conn.peer, conn); this._wire(conn); if (this.onPeerJoin) this.onPeerJoin(conn.peer, conn.metadata || {}); };
+      const seat = () => { if (this.conns.has(conn.peer)) return; if(!this.accepting || this.conns.size >= this.maxPlayers-1 || this.bannedPeers.has(conn.peer) || this.bannedClients.has(conn.metadata?.clientId)){conn.close();return;} this.conns.set(conn.peer, conn); this._wire(conn); if (this.onPeerJoin) this.onPeerJoin(conn.peer, conn.metadata || {}); };
       const welcome = { hostId: this.id, code: this.aliasCode || this.code, isPublic: this.isPublic, players: this.conns.size + 1, max: this.maxPlayers, inMatch: !!this.inMatch, hostName: this.hostName };
       if (conn.metadata && conn.metadata.probe) {
         conn.send({ t: 'welcome', d: welcome, from: this.id });
@@ -113,6 +134,7 @@ export class Net {
     this.leave(); this.isHost = false; code = String(code || '').trim().toUpperCase();
     if (!code) throw new Error('enter a lobby code');
     this.peer = await this._newPeer(null);
+    meta = { ...meta, clientId: this.clientId };
     this.id = this.peer.id; this._keepAlive(this.peer);
     // a lobby that changed hosts lives on a generation code; the plain code still finds it
     const base = code.replace(/-\d+$/, ''); const ids = [code, ...['-1', '-2', '-3'].map((suf) => base + suf).filter((c) => c !== code)].map((c) => PREFIX + c);
@@ -132,7 +154,7 @@ export class Net {
       const onErr = (err) => { if (err && err.type === 'peer-unavailable') { const a = attempts.find((x) => x.hostId === idFromError(err)); if (a) failOne(a); } };
       this.peer.on('error', onErr);
       const timer = setTimeout(settle, QUICK_TIMEOUT);
-      const probeMeta = { ...meta, probe: true };
+      const probeMeta = { ...meta, clientId: this.clientId, probe: true };
       for (const hostId of ids) {
         let conn; try { conn = this.peer.connect(hostId, { reliable: true, serialization: 'json', metadata: probeMeta }); } catch (e) { pending--; continue; }
         const a = { conn, hostId, done: false }; attempts.push(a);
@@ -158,7 +180,7 @@ export class Net {
       const onErr = (err) => { if (err && err.type === 'peer-unavailable') { const a = attempts.find((x) => x.hostId === idFromError(err)); if (a) failOne(a); } };
       peer.on('error', onErr);
       const timer = setTimeout(settle, QUICK_TIMEOUT);
-      const probeMeta = { ...meta, probe: true };
+      const probeMeta = { ...meta, clientId: this.clientId, probe: true };
       for (const hostId of ids) {
         let conn; try { conn = peer.connect(hostId, { reliable: true, serialization: 'json', metadata: probeMeta }); } catch (e) { pending--; continue; }
         const a = { conn, hostId, done: false }; attempts.push(a);
@@ -209,10 +231,17 @@ export class Net {
     // closing our own connections must not look like other people leaving
     this.leaving = true; clearTimeout(this._aliasTimer); this._aliasTimer = null; if (this.alias) { try { this.alias.destroy(); } catch (e) { /* ignore */ } } this.alias = null; this.aliasCode = null;
     for (const c of this.conns.values()) { try { c.close(); } catch (e) { /* ignore */ } }
-    this.conns.clear(); if (this.peer) { try { this.peer.destroy(); } catch (e) { /* ignore */ } }
+    this.conns.clear(); this.ingressRates.clear(); if (this.peer) { try { this.peer.destroy(); } catch (e) { /* ignore */ } }
     this.peer = null; this.connected = false; this.isHost = false; this.id = null; this.code = null; this.hostId = null; this.leaving = false;
   }
 
+  kick(pid) {
+    if (!this.isHost || pid === this.id) return false;
+    const c = this.conns.get(pid); if (!c) return false;
+    this.bannedPeers.add(pid); if (c.metadata?.clientId) this.bannedClients.add(c.metadata.clientId);
+    this.sendTo(pid, 'kick', { reason: 'host' }); this._drop(pid);
+    setTimeout(() => { try { c.close(); } catch {} }, 150); return true;
+  }
   // ---- messaging ----
   // host: to everyone; client: to the host (and on to everyone if relay is set)
   send(type, data, relay = false) {

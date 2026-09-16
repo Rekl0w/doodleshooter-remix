@@ -43,7 +43,7 @@ export class Player {
     this.hookMesh.add(new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.05, 6, 10), hm)); const hb = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), hm); hb.position.y = -0.2; this.hookMesh.add(hb);
     this.hookMesh.visible = false; ctx.scene.add(this.hookMesh);
   }
-  reset(pos) {
+  reset(pos, { preserveWorld = false } = {}) {
     this.lifeId = (this.lifeId || 0) + 1;
     this.nadeCharge = 0; this._nadeHeld = false; if (this._arc) this.updateNadeArc(-1); this.grapStam = 1; this.blockHeld = 0;
     const b = this.body; b.pos.copy(pos); b.vel.set(0, 0, 0); b.onGround = false; b.height = STAND_H;
@@ -52,8 +52,8 @@ export class Player {
     for (const w of this.weapons) w.reset();
     this.returnT = 0; this.prevWeaponIndex = 0; this.nadeCd = 0; this.blockCd = 0; this.stamPause = 0;
     this.sprintToggle = false; this._aiming = false; this.jumpBuffer = 0; this.coyote = 0;
-    this.ordnance.reset(); this.mantleCd = 0; this.lastGround = false;
-    this.switchTo(0, true); this.rig.visible = true; this.eyeH = EYE_STAND; this.grenades = 3; this.clearNades();
+    this.ordnance.reset(preserveWorld); this.mantleCd = 0; this.lastGround = false;
+    this.switchTo(0, true); this.rig.visible = true; this.eyeH = EYE_STAND; this.grenades = 3; if (!preserveWorld) this.clearNades();
   }
   clearNades() { for (const n of this.nades) this.ctx.scene.remove(n.mesh); this.nades.length = 0; this.seenGrenades.clear(); }
   get isBlocking() { return this.weapon.kind === 'katana' && this.weapon.blocking; }
@@ -66,14 +66,18 @@ export class Player {
     audio.dash(); this.kickFov(3);
   }
   switchTo(i, silent = false) {
+    if (!this.weaponAllowed(i)) return;
     if (i < 0 || i >= this.weapons.length) return; if (i === this.weaponIndex && !silent) return;
     this.returnT = 0;
     if (this.weapon.kind !== 'katana') this.prevWeaponIndex = this.weaponIndex;
     this.weapon.unequip(); this.weaponIndex = i; this.weapon = this.weapons[i]; this.weapon.equip(); if (!silent) audio.switchWeapon();
     this.ctx.hud.setWeapon(this.weapon.name, this.weapon.hint); this.ctx.hud.setCrosshairMode(this.weapon.kind === 'katana' ? 'katana' : '');
   }
+  weaponAllowed(i) { return !(this.ctx.game.mode === 'ffa' && this.ctx.game.katanaAllowed === false && i === this.katanaIndex); }
+  cycleWeapon(step) { let i = this.weaponIndex; do { i = (i + step + this.weapons.length) % this.weapons.length; } while (!this.weaponAllowed(i)); this.switchTo(i); }
   addAmmoAll(frac = 0.5) { for (const w of this.weapons) if (w.isGun) w.addAmmo(Math.round(w.maxReserve * frac)); }
   takeDamage(amount, fromPos) {
+    if (this.ctx.authorityActive?.() && !this.ctx.applyingVitals) return;
     if (!this.alive) return;
     this.hp -= amount; this.lastDamageT = 0; this.hurtFx = Math.min(1, this.hurtFx + amount / 40);
     this.ctx.effects.shakeAmt += 0.2 + amount / 80; audio.hurt(); this.ctx.input.rumble(0.8, 0.5, 160);
@@ -199,6 +203,7 @@ export class Player {
     ctx.world.moveBody(b, dt);
     const bounds = ctx.level.bounds;
     if (b.pos.y < -12 || b.pos.x < bounds.minX - 10 || b.pos.x > bounds.maxX + 10 || b.pos.z < bounds.minZ - 10 || b.pos.z > bounds.maxZ + 10) {
+      if(ctx.authorityActive?.()) {ctx.reportFall?.(b.pos.toArray());this.detachGrapple(false);b.vel.set(0,0,0);return;}
       this.detachGrapple(false); b.pos.copy(ctx.level.playerStart); b.vel.set(0, 0, 0); this.takeDamage(20, null); if (this.onFall) this.onFall();
       ctx.hud.message(ui("You fell off the page"), ui("Returned to spawn"), 1.8);
     }
@@ -209,7 +214,7 @@ export class Player {
     }
     this.lastGround = b.onGround;
     // ---- regen, bob, footsteps ----
-    if (this.lastDamageT > this.regenDelay && this.hp < this.maxHp && !this._sprinting && this.grapple.state === 'idle') this.hp = Math.min(this.maxHp, this.hp + this.regenRate * dt);
+    if (!ctx.authorityActive?.() && this.lastDamageT > this.regenDelay && this.hp < this.maxHp && !this._sprinting && this.grapple.state === 'idle') this.hp = Math.min(this.maxHp, this.hp + this.regenRate * dt);
     this.blockHeld = this.isBlocking ? this.blockHeld + dt : 0;
     // the grapple runs on breath: hanging drains it, feet on the ground bring it back fast
     this.stamPause -= dt;
@@ -232,11 +237,11 @@ export class Player {
       const zoom = inp.wheelDelta ? -Math.sign(inp.wheelDelta) : inp.pressed('zoomIn') || inp.pressed('nextWeapon') ? 1 : inp.pressed('zoomOut') || inp.pressed('prevWeapon') ? -1 : 0;
       if (zoom) this.weapon.changeZoom(zoom);
     } else {
-      if (inp.pressed('nextWeapon')) this.switchTo((this.weaponIndex + 1) % this.weapons.length);
-      if (inp.pressed('prevWeapon')) this.switchTo((this.weaponIndex + this.weapons.length - 1) % this.weapons.length);
+      if (inp.pressed('nextWeapon')) this.cycleWeapon(1);
+      if (inp.pressed('prevWeapon')) this.cycleWeapon(-1);
     }
     const st = this._weaponState(sprinting, aiming, hs2);
-    if (inp.pressed('melee') && this.weapon.kind !== 'katana') { this.switchTo(this.katanaIndex); this.returnT = 0.85; this.weapons[this.katanaIndex].startSlash(st); st.meleePressed = false; }
+    if (this.weaponAllowed(this.katanaIndex) && inp.pressed('melee') && this.weapon.kind !== 'katana') { this.switchTo(this.katanaIndex); this.returnT = 0.85; this.weapons[this.katanaIndex].startSlash(st); st.meleePressed = false; }
     if (this.returnT > 0) { if (this.weapon.kind === 'katana' && (st.firePressed || st.aim || st.meleePressed)) this.returnT = 0; else { this.returnT -= dt; if (this.returnT <= 0) this.switchTo(this.prevWeaponIndex); } }
     this.firing = st.fire && this.weapon.isGun;
     this.weapon.animate(dt, st);
@@ -266,7 +271,7 @@ export class Player {
     const pin = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.02, 4, 8), makeInkMaterial({ ink: INK.ORANGE })); pin.position.y = 0.2; g.add(pin);
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.1, 6), makeInkMaterial({ ink: INK.ORANGE })); cap.position.y = 0.17; g.add(cap);
     g.position.copy(pos); ctx.scene.add(g);
-    this.nades.push({ id, mesh: g, pos, vel, ang: new THREE.Vector3(rand(-6, 6), rand(-6, 6), rand(-6, 6)), fuse: 1.7, mine: !remote, rest: false, tick: 0 });
+    this.nades.push({ id, owner: remote?.owner || null, mesh: g, pos, vel, ang: new THREE.Vector3(rand(-6, 6), rand(-6, 6), rand(-6, 6)), fuse: 1.7, mine: !remote, rest: false, tick: 0 });
   }
   updateNadeArc(charge) {
     if (!this._arc) {
@@ -315,6 +320,7 @@ export class Player {
     if (n.exploded) return; n.exploded = true;
     const ctx = this.ctx, R = GRENADE.radius, c = n.pos.clone(); c.y += 0.25;
     ctx.effects.boom(c, R); audio.explosion(c); ctx.input.rumble(0.9, 0.9, 220);
+    if (ctx.authorityActive?.()) { ctx.authorityExplosion?.(n, c); return; }
     // Remote grenades are visual only. The thrower owns opponent damage.
     if (!n.mine) return;
     const visible = target => ctx.world.hasLineOfSight(c, target);

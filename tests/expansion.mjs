@@ -9,11 +9,21 @@ const shot=async name=>{if(process.env.MAP_SCREENSHOTS) await page.screenshot({p
 try {
  await page.goto(process.env.GAME_URL||'http://127.0.0.1:8911');await page.waitForFunction(()=>!!window.__game);
  await page.locator('[data-map="forest"]').click();await page.locator('#soloBtn').click();
- await page.evaluate(()=>{__game.game.queue=[];__game.enemies.clear();__game.game.intermission=999;__game.hud.message('','',0);});
+ await page.evaluate(()=>{__game.input.usingGamepad=true;__game.game.menu=false;__game.game.queue=[];__game.enemies.clear();__game.game.intermission=999;__game.hud.message('','',0);});
  await page.keyboard.press('0');await page.mouse.down({button:'right'});await page.waitForTimeout(1100);
  check('FAMAS has a centered sight above its carrying handle',await page.evaluate(()=>{const p=__game.player,w=p.weapon,v=p.eye.clone();w.sightDot.getWorldPosition(v);v.project(p.camera);return w.kind==='famas'&&Math.abs(v.x)<.015&&Math.abs(v.y)<.015;}));
  check('FAMAS sight picture is unobstructed',await page.evaluate(async()=>{const T=await import('/vendor/three/three.module.js'),p=__game.player,w=p.weapon;const ray=new T.Raycaster(p.eye,p.camera.getWorldDirection(new T.Vector3()),.05,1);return ray.intersectObject(w.root,true).every(h=>h.object===w.sightDot);}));
  await shot('famas-nisan');await page.mouse.up({button:'right'});
+ await page.keyboard.press('6');await page.mouse.down({button:'right'});await page.waitForTimeout(1100);
+ for(const style of ['notebook','solid']) {
+  await page.evaluate(style=>__game.ctx.renderer.setAppearance(style),style);
+  check('SMG '+style+': RMB aligns the raised sight with the camera',await page.evaluate(()=>{const p=__game.player,w=p.weapon,v=p.eye.clone();w.sightDot.getWorldPosition(v);v.project(p.camera);return w.kind==='smg'&&w.aimAmt>.99&&Math.abs(v.x)<.015&&Math.abs(v.y)<.015;}));
+  check('SMG '+style+': receiver and hands leave center view clear',await page.evaluate(async()=>{const T=await import('/vendor/three/three.module.js'),p=__game.player,w=p.weapon,ray=new T.Raycaster();for(const x of [-.02,0,.02])for(const y of [0,.02]){ray.setFromCamera(new T.Vector2(x,y),p.camera);ray.near=.05;ray.far=1;if(ray.intersectObject(w.root,true).some(h=>h.object!==w.sightDot))return false;}return true;}));
+  await shot('smg-ads-'+style);
+ }
+ await page.mouse.up({button:'right'});await page.waitForFunction(()=>__game.player.weapon.aimAmt<.05);
+ check('SMG returns cleanly to hip fire when RMB is released',true);
+ await page.evaluate(()=>__game.ctx.renderer.setAppearance('notebook'));
  await page.keyboard.press('9');await page.waitForTimeout(700);
  check('9 selects two independently modelled pistols',await page.evaluate(()=>__game.player.weapon.kind==='dual'&&__game.player.weapon.hands.length===2));
  const mag=await page.evaluate(()=>__game.player.weapon.mag);

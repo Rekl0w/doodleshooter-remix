@@ -45,6 +45,8 @@ try {
     check('remote gun slot ' + i + ' synchronizes', true);
     if (i === 8) check('dual pistols appear in both remote hands', await guest.evaluate(() => {const r=[...__game.remote.values()][0];return r.leftGun?.visible&&r.leftGun.parent===r.J.foreL&&r.J.gun.children.length>0;}));
   }
+  const guestId=await guest.evaluate(()=>__game.net.id);
+  await host.evaluate(id=>{for(const [key,z]of [[__game.net.id,20],[id,10]]){const p=__game.combat.players.get(key);p.pos=[0,0,z];p.history=[];p.protectedUntil=0;}},guestId);
   for (const [p, z] of [[host, 20], [guest, 10]]) await p.evaluate(z => {
     const g = __game; g.game.menu = false; g.hud.hideScreen(); g.player.body.pos.set(0, 0, z); g.player.body.vel.set(0,0,0);
     g.player.shieldT = 0; g.player.yaw = 0; g.player.pitch = 0;
@@ -58,7 +60,7 @@ try {
   await guest.waitForFunction(hp => __game.player.hp < hp, hp);
   check('AK-47 PvP damage arrives over WebRTC', await guest.evaluate(hp => hp - __game.player.hp > 0 && hp - __game.player.hp <= 44, hp));
   await host.evaluate(() => {
-    const g = __game, p = g.player; p.body.pos.set(0,0,0); p.body.vel.set(0,0,0); p.grapStam = 1;
+    const g = __game, p = g.player; g.combat.players.get(g.net.id).pos=[0,0,0]; p.body.pos.set(0,0,0); p.body.vel.set(0,0,0); p.grapStam = 1;
     const b = g.level.grappleMovers.find(b => b.id === 'bird-0');
     const d = b.mesh.position.clone().sub(p.body.pos.clone().add({ x: 0, y: 1.6, z: 0 })).normalize();
     p.yaw = Math.atan2(-d.x, -d.z); p.pitch = Math.asin(d.y); g.game.menu = false; g.hud.hideScreen();

@@ -69,7 +69,7 @@ const GUNS = {
   shotgun: { name: ui("Shotgun"), hint: ui("Powerful up close · Fire to interrupt reload"), kind: 'shotgun', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.78, damage: 19, headMul: 1.8, pellets: 10, spread: 0.062, adsSpread: 0.034, spreadKick: 0, spreadMax: 0.1, adsFov: 68, sight: [0, 0.095, -1.0, 0.52], camKick: [0.05, 0.012], modelKick: [0.4, 0.6, 5, -9, 2, 3], fovKick: 4, reloadDur: 0.45, reloadType: 'shells', auto: false, falloff: [11, 32, 0.22], tracer: 0.014, flashScale: 1.9, sound: 'shotgunFire', shell: [0.035, INK.RED], moveSpread: 0.0006, cycleDur: 0.45, pvp: [16, 1.6, [9, 26, 0.15]] },
   sniper: { name: ui("Sniper"), hint: ui("Long range · RMB to scope"), kind: 'sniper', scope: true, magSize: 5, reserve: 25, maxReserve: 50, interval: 0.2, damage: 150, headMul: 3, pellets: 1, spread: 0.075, adsSpread: 0.0004, spreadKick: 0.05, spreadMax: 0.14, adsFov: 20, sight: [0, 0.135, 0, 0.42], camKick: [0.055, 0.008], modelKick: [0.25, 0.8, 4.5, -11, 1.2, 2], fovKick: 4.5, reloadDur: 2.1, reloadType: 'mag', auto: false, falloff: null, tracer: 0.03, flashScale: 1.7, sound: 'sniperFire', shell: [0.03, INK.ORANGE], moveSpread: 0.004, cycleDur: 0.85, pvp: [150, 1.5, null] },
   revolver: { name: 'Revolver', hint: ui("Solo: unlimited reserve · 6 shots, then R to reload"), kind: 'revolver', magSize: 6, reserve: 36, maxReserve: 72, interval: 0.4, damage: 42, headMul: 2.4, pellets: 1, spread: 0.006, adsSpread: 0.002, spreadKick: 0.02, spreadMax: 0.06, adsFov: 52, sight: [0, 0.08, -0.34, 0.42], camKick: [0.038, 0.007], modelKick: [0.3, 0.9, 3.2, -10, 1.5, 2.5], fovKick: 2.5, reloadDur: 1.6, reloadType: 'cylinder', auto: false, falloff: null, tracer: 0.026, flashScale: 1.35, sound: 'revolver', shell: null, moveSpread: 0.0015, pvp: [42, 2.4, [9, 34, 0.42]] },
-  smg: { name: 'SMG', hint: ui("Rapid fire · Close combat on the move"), kind: 'smg', magSize: 28, reserve: 168, maxReserve: 336, interval: 1 / 16, damage: 16, headMul: 2, pellets: 1, spread: 0.022, adsSpread: 0.007, spreadKick: 0.005, spreadMax: 0.065, adsFov: 64, sight: [0, 0.09, -0.1, 0.32], camKick: [0.006, 0.004], modelKick: [0.2, 0.2, 1.7, -2, 1, 1.5], fovKick: 0.7, reloadDur: 1.15, reloadType: 'mag', auto: true, falloff: [12, 38, 0.35], tracer: 0.016, flashScale: 0.8, sound: 'shot', shell: [0.018, INK.ORANGE], moveSpread: 0.0005, pvp: [13, 1.7, [10, 30, 0.3]] },
+  smg: { name: 'SMG', hint: ui("Rapid fire · Close combat on the move"), kind: 'smg', magSize: 28, reserve: 168, maxReserve: 336, interval: 1 / 16, damage: 16, headMul: 2, pellets: 1, spread: 0.022, adsSpread: 0.007, spreadKick: 0.005, spreadMax: 0.065, adsFov: 64, sight: [0, 0.145, -0.14, 0.42], camKick: [0.006, 0.004], modelKick: [0.2, 0.2, 1.7, -2, 1, 1.5], fovKick: 0.7, reloadDur: 1.15, reloadType: 'mag', auto: true, falloff: [12, 38, 0.35], tracer: 0.016, flashScale: 0.8, sound: 'shot', shell: [0.018, INK.ORANGE], moveSpread: 0.0005, pvp: [13, 1.7, [10, 30, 0.3]] },
 };
 
 const ARSENAL = {
@@ -340,7 +340,11 @@ export class SMG extends Gun {
     bx(0.06, 0.07, 0.23, 0, -0.025, 0.25, dark, g);
     this.magMesh = bx(0.052, 0.25, 0.085, 0, -0.17, -0.025, mat, g); this.magY = -0.17;
     bx(0.05, 0.13, 0.07, 0, -0.12, 0.12, dark, g).rotation.x = 0.2;
-    frame(0.07, 0.055, 0.01, 0.02, 0, 0.09, -0.1, mat, g); sph(0.002, 0, 0.09, -0.1, this.red, g);
+    // Raised, thin optic keeps the receiver/stock below the sight line. The longer
+    // eye relief also prevents the stock from filling the bottom half of ADS.
+    bx(.035, .045, .035, 0, .0875, -.14, dark, g);
+    frame(.09, .075, .007, .016, 0, .145, -.14, mat, g);
+    this.sightDot = sph(.002, 0, .145, -.14, this.red, g);
     hand(mat, 0.02, -0.15, 0.13, g); this.handL = hand(mat, -0.05, -0.07, -0.15, g, [-0.35, -0.9, 0.9]); this.handLPos = this.handL.position.clone();
     this.muzzle = new THREE.Object3D(); this.muzzle.position.set(0, 0.025, -0.41); g.add(this.muzzle);
     this.ejectPt = new THREE.Object3D(); this.ejectPt.position.set(0.06, 0.02, 0); g.add(this.ejectPt);
@@ -449,6 +453,7 @@ export class Katana extends ViewModel {
   }
   unequip() { super.unequip(); this.slashT = 0; this.blocking = false; this.blockAmt = 0; this.hitTargets.clear(); }
   startSlash(st) {
+    if (this.ctx.game.mode === 'ffa' && this.ctx.game.katanaAllowed === false) return;
     this.hitTargets.clear(); this.hitFeedback = false;
     this.slashT = this.slashDur; this.hitDone = false; this.combo++; this.comboT = 0.9; this.cooldown = this.slashDur + 0.06;
     audio.katanaSwing(); this.ctx.player.kickFov(2);

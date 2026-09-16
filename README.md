@@ -15,13 +15,14 @@ This is a community remix of **[DoodleShooter by iifor](https://github.com/iifor
 
 - **11 maps:** compact VS arenas, large dense forests, a Dust 2 adaptation, and a city with 24 towers.
 - **Weapons:** rifle, shotgun, sniper, revolver, SMG, AK-47, M4A1, dual pistols, FAMAS, M249, DMR, and katana.
+- **Clearer SMG aiming:** raised thin-frame sight and more eye relief keep the gun below the center view.
 - **Adjustable scopes:** sniper 2× / 4× / 8×; DMR 2× / 3× / 4× / 6×.
 - **Grappling:** hold Q to attach and reel in; release to carry your momentum. Flying ducks and swallows can carry you too.
 - **Grenades and mines:** expanded blast areas, cover-aware damage, and online synchronization.
 - **Solo resupply:** improved ammo drops, katana kill rewards, and unlimited revolver reserve ammo.
 - **English by default, optional Turkish:** use **Language / Dil** in the main menu. Your choice is saved locally; changing language reloads the menu. Players using different languages can share the same lobby.
 - **Two visual styles on every map:** after selecting a map, choose **Lined notebook** or **Solid colors**. Solid mode removes paper lines, crosshatching, and outline wobble. Your preference is saved per map and only affects your own view, including online games.
-- **Online feedback:** hit markers confirm damage accepted by the target, with clear spawn-protection feedback. Player names follow visible opponents and stay hidden behind cover.
+- **Online feedback:** hit markers confirm damage accepted by the host, with clear spawn-protection feedback. Player names follow visible opponents and stay hidden behind cover.
 - **Respawning:** after the countdown, click **Respawn** or press Space / Enter. Mouse movement and held buttons do not respawn you accidentally.
 - Mouse sensitivity, inverted look, music settings, map previews, and gamepad support.
 - Fixes for repeated wall jumping, weapon poses, reload states, and leaving map boundaries.
@@ -77,13 +78,22 @@ Dust II is based on **Counter-Strike / Valve** references: [Valve's Dust II pres
 1. Everyone opens the same up-to-date game URL.
 2. Choose **ONLINE → Private · Friends → Create room**.
 3. Share the room code; friends enter it and press **Join**.
-4. The **host** chooses the map and presses **Start match**. Guests wait for the host; they cannot start the match or change the map.
+4. The **host** chooses the map, sets **Allow katana**, and presses **Start match**. Guests wait for the host; they cannot start the match or change the map.
 
 After the map is selected, each player can choose their own visual style below the map cards.
 
 Up to **10 players**, with a target of **20 kills**. Joining a match already in progress is supported. Use **Quick play** to find public rooms.
 
-PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v10` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
+PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v11` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
+
+### Moderation and temporary anti-cheat
+
+- The host can **Kick** a player from the lobby or the in-match **Esc → Menu → Manage players** panel. Removing a player closes their connection and removes them from every roster. The current room remembers their peer ID and browser ID; changing only their name does not bypass removal.
+- **Allow katana** is set before each round. Disabled katana is skipped by weapon cycling and quick melee, and the host rejects katana damage. Late joiners inherit the same rule.
+- The host owns health, spawn protection, accepted damage, deaths, scores and respawns. Hit proposals are checked for weapon damage, cadence, replay, life generation, range and cover. Grenades and mines damage players through host simulation; health pickups and regeneration also use the host ledger.
+- A modified guest cannot stay alive for everyone else by ignoring damage or forging health, death, invisibility or host-control messages. Killing the guest still updates the host score, and attacks from their dead life are rejected.
+- **The host must be trusted.** This is a temporary P2P safeguard, not complete anti-cheat: there is no trusted dedicated server, authoritative movement/ammunition simulation, or aimbot prevention. A malicious host can still change match decisions. Anonymous room removal can be bypassed by changing/clearing browser identity. Client-side code and keys cannot be made secret from the person running the browser.
+- The room ends when its host leaves; combat authority is not transferred to another player. These safeguards require no new hosting service or paid backend.
 
 ## Run locally
 
@@ -121,6 +131,8 @@ Start the local server, then use a Playwright installation:
 ```bash
 npm install --no-save --package-lock=false playwright
 npx playwright install chromium
+node tests/host-combat.mjs
+node tests/authority.mjs
 node tests/run.mjs
 node tests/maps.mjs
 node tests/expansion.mjs

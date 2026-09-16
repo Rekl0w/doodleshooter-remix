@@ -1,5 +1,10 @@
 // Turkish UI translations. Keep {0}, {1}, ... placeholders intact.
 export default {
+  "Allow katana": "Katanaya izin ver",
+  "Katana enabled": "Katana açık",
+  "Katana disabled": "Katana kapalı",
+  "Manage players": "Oyuncuları yönet",
+  "Kick": "Odadan at",
   "Respawn": "Yeniden doğ",
   "Respawn in {0}": "{0} saniye sonra yeniden doğ",
   "Click or press {0} / Enter": "Tıkla ya da {0} / Enter tuşuna bas",

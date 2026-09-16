@@ -12,14 +12,14 @@ function mineModel() {
   const light = new THREE.Mesh(new THREE.CylinderGeometry(.13, .16, .07, 8), makeInkMaterial({ ink: INK.ORANGE })); light.position.y = .09;
   g.add(base, light); return g;
 }
-// Mines are owner-authoritative. Peers render placements and receive damage once from the owner.
+// Online placements are validated and triggered by the host; peers render its decisions.
 export class Ordnance {
   constructor(ctx) { this.ctx = ctx; this.mines = []; this.remoteMines = new Map(); this.seen = new Set(); this.serial = 0; this.mineStock = 3; this.mineCd = 0; }
   emit(data) { this.ctx.onOrdnance?.(data); }
-  reset() {
+  reset(preserveRemote = false) {
     for (const m of this.mines) { this.emit({ op: 'remove', id: m.id, pos: m.pos.toArray() }); remove(this.ctx.scene, m.mesh); }
-    for (const m of this.remoteMines.values()) remove(this.ctx.scene, m.mesh);
-    this.mines = []; this.remoteMines.clear(); this.seen.clear(); this.mineStock = 3; this.mineCd = 0;
+    if (!preserveRemote) for (const m of this.remoteMines.values()) remove(this.ctx.scene, m.mesh);
+    this.mines = []; if (!preserveRemote) { this.remoteMines.clear(); this.seen.clear(); } this.mineStock = 3; this.mineCd = 0;
   }
   resupply() { this.mineStock = Math.min(3, this.mineStock + 1); }
   placeMine() {
@@ -44,6 +44,7 @@ export class Ordnance {
   blast(kind, pos, id) {
     const ctx = this.ctx, P = ctx.player, spec = SUPPORT[kind], c = pos.clone().addScaledVector(up, .12);
     this.emit({ op: 'boom', id, pos: c.toArray() }); this.boom(kind, c);
+    if (ctx.authorityActive?.()) return;
     const visible = this.targets().filter(t => t.center.distanceTo(c) <= spec.radius && ctx.world.hasLineOfSight(c, t.center));
     const selfVisible = ctx.world.hasLineOfSight(c, P.center);
     // Snapshot cover before any explosion can destroy it.
@@ -61,6 +62,7 @@ export class Ordnance {
   receive(d, from = 'remote') {
     if (!d || !['place', 'remove', 'boom'].includes(d.op) || typeof d.id !== 'string' || d.id.length > 100 || !Array.isArray(d.pos) || d.pos.length !== 3 || !d.pos.every(n => Number.isFinite(n) && Math.abs(n) < 200)) return;
     const key = `${from}:${d.id}`, pos = new THREE.Vector3(...d.pos);
+    if(from===this.ctx.localPeerId?.()){const i=this.mines.findIndex(m=>m.id===d.id);if(d.op==='place')return;if(i>=0){remove(this.ctx.scene,this.mines[i].mesh);this.mines.splice(i,1);}}
     if (d.op === 'place') {
       if (this.remoteMines.has(key) || this.seen.has(key) || this.remoteMines.size >= 40) return;
       const mesh = mineModel(); mesh.position.copy(pos); this.ctx.scene.add(mesh); this.remoteMines.set(key, { mesh, from, life: 90 });
@@ -80,7 +82,7 @@ export class Ordnance {
     for (let i = this.mines.length - 1; i >= 0; i--) {
       const m = this.mines[i]; m.arm -= dt; m.life -= dt;
       m.mesh.children[1].visible = m.arm <= 0 || Math.sin(m.arm * 18) > 0;
-      const trigger = m.arm <= 0 && targets.some(t => t.center.distanceTo(m.pos) < SUPPORT.mineTrigger && ctx.world.hasLineOfSight(m.pos, t.center));
+      const trigger = !ctx.authorityActive?.() && m.arm <= 0 && targets.some(t => t.center.distanceTo(m.pos) < SUPPORT.mineTrigger && ctx.world.hasLineOfSight(m.pos, t.center));
       if (trigger || m.life <= 0) {
         this.mines.splice(i, 1); remove(ctx.scene, m.mesh);
         if (trigger) this.blast('mine', m.pos, m.id); else this.emit({ op: 'remove', id: m.id, pos: m.pos.toArray() });

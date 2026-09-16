@@ -293,3 +293,10 @@ html[lang="tr"] .online .plist .host span:first-child::after { content: ' · oda
 #hud.nogame .nameplates, #hud.nogame .respawn { display: none; }
 
 #hud.scoped .nameplates { clip-path: circle(30vh at 50% 50%); }
+
+.moderation { margin: 14px auto; max-width: 460px; padding: 12px; border: 2px solid var(--ink); border-radius: 8px; font-size: 18px; }
+.moderation label { display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer; }
+.moderation input { width: 20px; height: 20px; accent-color: var(--ink); }
+.moderation h3 { margin: 10px 0 5px; font-size: 18px; }
+.moderation-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px; }
+.moderation button { font: inherit; color: var(--red); background: var(--paper); border: 1px solid var(--red); border-radius: 5px; padding: 4px 12px; cursor: pointer; }

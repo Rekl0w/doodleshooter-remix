@@ -2,7 +2,7 @@ import { ui, language, selectLanguage } from './i18n.js';
 import { appearanceFor, saveAppearance } from './appearance.js';
 // Game bootstrap: solo waves, free-for-all lobbies, checkpoints, scoring, screens and the loop.
 // Online play is peer-to-peer: one player's browser hosts the lobby and keeps score, every
-// player runs their own body, and each one tells the others what it did.
+// player runs their own body. The host validates combat and owns health and respawns.
 import * as THREE from 'three';
 import { InkRenderer, INK, makeInkMaterial } from './render.js';
 import { World } from './physics.js';
@@ -15,9 +15,10 @@ import { Player } from './player.js';
 import { RemotePlayer, encodeLocal } from './players.js';
 import { Net } from './net.js';
 import { HUD, CONTROLS_HTML } from './hud.js';
+import { HostCombat, vector } from './host-combat.js';
 import { Nameplates } from './nameplates.js';
 import { audio } from './audio.js';
-import { inMeleeArc } from './combat.js';
+import { inMeleeArc, WEAPON_ORDER } from './combat.js';
 import { pickupPosition, needsPickup } from './supplies.js';
 import { SceneClock } from './sky.js';
 import { DUST_OUTLINE, DUST_ISLANDS } from './dust2.js';
@@ -85,10 +86,150 @@ player.name = myName;
 const net = new Net();
 const nameplates = new Nameplates(hud.root);
 const remote = new Map();      // peer id -> RemotePlayer
-const lobby = { players: new Map(), hostId: null, isPublic: true, status: '', code: '', map: null };
+const lobby = { katana: true, players: new Map(), hostId: null, isPublic: true, status: '', code: '', map: null };
 const scores = new Map();      // peer id -> { name, kills, deaths }
 let screen = 'main';           // which start-screen panel is showing: main | online | lobby
 window.__game = { ctx, game, player, enemies, nav, world, level, hud, effects, input, net, remote, lobby, scores };
+
+const deathEvents = new Set(), hostMines = new Map(), approvedGrenades = new Map();
+let combatSyncT = 0;
+const combat = new HostCombat({
+ sight: (a,b) => world.hasLineOfSight(new THREE.Vector3(...a), new THREE.Vector3(...b), box => box.data.noShoot === true),
+ changed: v => publishVitals(v),
+ died: d => { net.send('combat-death', d); combatDeath(d); tallyDeath(d.victim, d.killer); }
+});
+window.__game.combat = combat;
+ctx.authorityActive = () => net.active && online();
+function applyVitals(v) {
+ if (!online() || !inMatch() || !v || !Number.isFinite(v.hp) || !Number.isFinite(v.life)) return;
+ if (v.id !== net.id) {
+  const r = remote.get(v.id); if (r) { r.hp=v.hp; r.protected=v.protection>0; r.lifeId=v.life; if(v.hp<=0)r.alive=false; }
+  return;
+ }
+ if ((v.life !== player.lifeId || v.spawn) && v.hp > 0) {
+  const wasDead = !player.alive || game.state === 'dying';
+  player.reset(new THREE.Vector3(...v.pos), { preserveWorld: true }); player.lifeId=v.life; player.name=myName;
+  if(wasDead && !game.over) { game.state='play';game.menu=false;game.respawnRequestAt=0;hud.hideScreen();hud.setGameplayVisible(true);hud.setRespawn();hud.clearMessage();hud.tip(ui('Spawn protection · 2 s'),1.6); }
+ }
+ player.maxHp=110; player.shieldT=v.protection;
+ if(v.correction && v.hp>0) {player.body.pos.fromArray(v.pos);player.body.vel.set(0,0,0);}
+ if(v.lastHit) {player.lastHitBy=v.lastHit.killer;player.lastHit=v.lastHit;}
+ if(v.hp<player.hp && Number.isFinite(player.hp)) {
+  ctx.applyingVitals=true; try {player.takeDamage(Math.min(110,player.hp-v.hp),v.lastHit?.from?new THREE.Vector3(...v.lastHit.from):null);} finally {ctx.applyingVitals=false;}
+ }
+ player.hp=v.hp;
+ if(v.hp<=0) {if(player.alive)player.die();player.alive=false;game.respawnT=v.wait;game.respawnAt=performance.now()+v.wait*1000;}
+}
+function publishVitals(v) { applyVitals(v); net.send('combat-state', v); }
+function combatRequest(type,d) { if(!net.active||!online())return;if(net.isHost)net._emit(type,d,net.id);else net.send(type,d); }
+net.on('combat-state',(v,from)=>{if(from===net.hostId)applyVitals(v);});
+net.on('combat-hit',(d,from)=>{
+ if(!net.isHost||!online()||!inMatch()||game.over)return;
+ const result={...combat.hit(from,d),target:d?.target};
+ if(from===net.id)acceptHitResult(result);else net.sendTo(from,'combat-result',result);
+});
+net.on('combat-respawn',(d,from)=>{
+ if(!net.isHost||!inMatch()||game.over)return;const p=combat.players.get(from);if(!p||d?.life!==p.life)return;
+ const v=combat.respawn(from,arenaSpawn().toArray());if(v){clearHostMines(from);publishVitals(v);}else publishVitals(combat.view(p));
+});
+function combatDeath(d) {
+ const key=d.victim+':'+d.life;if(deathEvents.has(key))return;deathEvents.add(key);if(deathEvents.size>512)deathEvents.delete(deathEvents.values().next().value);
+ if(d.victim===net.id)return;
+ const r=remote.get(d.victim),vn=r?.name||ui('Player'),kn=scores.get(d.killer)?.name;
+ if(r){r.ragdoll(null,d.crit||d.amount>=90);audio.enemyDie(r.center);}
+ const weapon=howWord(d.src),how=weapon?' · '+weapon+(d.crit?ui(' Headshot'):''):'';
+ if(d.killer===net.id){game.kills++;game.addScore(100,ui('Eliminated: ')+vn+how);audio.kill(true);}
+ else hud.kill(kn?kn+ui(' eliminated ')+vn+how:vn+ui(' fell off the page'),0);
+}
+net.on('combat-death',(d,from)=>{if(from===net.hostId)combatDeath(d);});
+net.on('combat-cut',(d,from)=>{
+ if(!net.isHost||!inMatch()||game.over||!combat.katana||!vector(d?.point))return;
+ const a=combat.players.get(from),b=combat.players.get(d.target);
+ if(!a||!b||a.hp<=0||b.hp<=0||a.life!==d.life||a.snap?.[5]!==3||!(b.snap?.[6]&128))return;
+ const eye=new THREE.Vector3(...a.pos).add(new THREE.Vector3(0,1.6,0)),point=new THREE.Vector3(...d.point);
+ const rope=new THREE.Line3(new THREE.Vector3(...b.pos).add(new THREE.Vector3(0,1.25,0)),new THREE.Vector3(...b.snap.slice(11,14)));
+ if(eye.distanceTo(point)>4.4||rope.closestPointToPoint(point,true,new THREE.Vector3()).distanceTo(point)>1||!combat.sight(eye.toArray(),d.point)||!combat.allow(a,'cut',.36,1))return;
+ if(d.target===net.id)net._emit('cut',{},net.id);else net.sendTo(d.target,'cut',{});
+});
+function allowGrenade(d,from) {
+ const p=combat.players.get(from);if(!p||p.hp<=0||!vector(d?.pos)||!vector(d?.vel)||typeof d.id!=='string'||d.id.length>100||p.grenades<=0)return false;
+ if(new THREE.Vector3(...d.pos).distanceTo(new THREE.Vector3(...p.pos))>5||!combat.sight([p.pos[0],p.pos[1]+1.6,p.pos[2]],d.pos)||Math.hypot(...d.vel)>40+Math.hypot(...(p.snap?.slice(8,11)||[0,0,0]))*.5||!combat.allow(p,'grenade',.55,1))return false;
+ const key=from+':'+d.id;if(approvedGrenades.has(key))return false;approvedGrenades.set(key,{owner:from,id:d.id});p.grenades--;return true;
+}
+ctx.authorityExplosion=(n,c)=>{
+ if(!net.isHost)return;const owner=n.owner||net.id,key=n.owner?n.id:owner+':'+n.id,entry=approvedGrenades.get(key);
+ if(!entry)return;approvedGrenades.delete(key);combat.blast(owner,entry.id,c.toArray(),'grenade');ctx.blastBreakables?.(c,8.5);
+};
+function allowMine(d,from) {
+ const p=combat.players.get(from),key=from+':'+d?.id;
+ if(!p||typeof d?.id!=='string'||d.id.length>100||!vector(d.pos)||d.map!==level.key)return false;
+ if(d.op==='remove'){hostMines.delete(key);return true;}
+ if(d.op!=='place'||p.hp<=0||p.mines<=0||hostMines.has(key)||[...hostMines.values()].filter(m=>m.owner===from).length>=4)return false;
+ if(new THREE.Vector3(...d.pos).distanceTo(new THREE.Vector3(...p.pos))>4.5||!combat.sight([p.pos[0],p.pos[1]+1.5,p.pos[2]],d.pos)||!combat.allow(p,'mine',.6,1))return false;
+ hostMines.set(key,{owner:from,id:d.id,pos:[...d.pos],at:performance.now()/1000});p.mines--;return true;
+}
+function removeHostMine(key,m,boom=false) {
+ hostMines.delete(key);const d={op:boom?'boom':'remove',id:m.id,pos:m.pos,map:level.key,owner:m.owner};
+ player.ordnance.receive(d,m.owner);net.send('ordnance',d);
+ if(boom){const c=new THREE.Vector3(...m.pos);c.y+=.12;combat.blast(m.owner,m.id,c.toArray(),'mine');ctx.blastBreakables?.(c,6);}
+}
+function clearHostMines(owner) {for(const [key,m]of hostMines)if(m.owner===owner)removeHostMine(key,m);}
+function tickHostMines() {
+ const now=performance.now()/1000;
+ for(const [key,m]of hostMines){
+  if(now-m.at>90){removeHostMine(key,m);continue;}if(now-m.at<1)continue;
+  const target=[...combat.players.values()].some(p=>p.id!==m.owner&&p.hp>0&&Math.hypot(p.pos[0]-m.pos[0],p.pos[1]+1-m.pos[1],p.pos[2]-m.pos[2])<3.2&&combat.sight(m.pos,[p.pos[0],p.pos[1]+1,p.pos[2]]));
+  if(target)removeHostMine(key,m,true);
+ }
+}
+net.onIngress=(msg,from)=>{
+ const d=msg.d,p=combat.players.get(from);
+ if(!['ps','nade','ordnance','shots','brk','mine-sync','take','scene-ping','combat-hit','combat-respawn','combat-fall','combat-cut'].includes(msg.t))return null;
+ if(['mine-sync','take','scene-ping'].includes(msg.t))return {...msg,relay:false,to:undefined};
+ if(msg.t==='ps') {
+  if(!inMatch())return null;const snap=combat.snapshot(from,d);
+  if(!snap){if(p)net.sendTo(from,'combat-state',{...combat.view(p),correction:true});return null;}
+  return {...msg,d:snap,relay:true,to:undefined};
+ }
+ if(msg.t==='nade'){if(!allowGrenade(d,from))return null;return {...msg,d:{id:d.id,pos:d.pos,vel:d.vel},relay:true,to:undefined};}
+ if(msg.t==='ordnance'){if(!allowMine(d,from))return null;return {...msg,d:{op:d.op,id:d.id,pos:d.pos,map:d.map},relay:true,to:undefined};}
+ if(msg.t==='shots'&&(!p||p.hp<=0||!Array.isArray(d.e)||d.e.length>120||d.e.length%3!==0||!d.e.every(n=>Number.isFinite(n)&&Math.abs(n)<=2000)||!WEAPON_ORDER.includes(d.k)))return null;
+ if(['cut','parry'].includes(msg.t))return null; // Never accept unverified client knockbacks/rope cuts.
+ if(msg.t==='brk'&&(!p||p.hp<=0||!Number.isInteger(d.id)||!level.breakables[d.id]||new THREE.Vector3(...p.pos).distanceTo(level.breakables[d.id].pos)>600||!world.hasLineOfSight(new THREE.Vector3(...p.pos).add(new THREE.Vector3(0,1.6,0)),level.breakables[d.id].pos,box=>box===level.breakables[d.id].box)||!combat.allow(p,'break',.08,4)))return null;
+ if(msg.t==='fell')return null;
+ return msg;
+};
+ctx.localPeerId=()=>net.id;
+
+
+ctx.reportFall = pos => {if(performance.now()-(game.fallRequestAt||0)<800)return;game.fallRequestAt=performance.now();combatRequest('combat-fall',{pos,life:player.lifeId});};
+net.on('combat-fall',(d,from)=>{
+ if(!net.isHost||!inMatch()||game.over||!vector(d?.pos))return;
+ const p=combat.players.get(from),B=level.bounds;if(!p||p.hp<=0||p.life!==d.life||!combat.allow(p,'fall',1,1))return;
+ if(d.pos[1]>=-12&&d.pos[0]>=B.minX-10&&d.pos[0]<=B.maxX+10&&d.pos[2]>=B.minZ-10&&d.pos[2]<=B.maxZ+10)return;
+ combat.damage(p,20,null,{src:'fall'});p.pos=level.playerStart.toArray();p.history=[];publishVitals({...combat.view(p),correction:true});
+ const sc=scores.get(from);if(sc){sc.kills=Math.max(0,sc.kills-1);sendScores();net.send('feed',{event:'fell',name:sc.name});}
+});
+function hostPickup(d,from) {
+ if(!net.isHost||!inMatch()||game.over)return;
+ const p=pickups.find(x=>x.id===d?.id),v=combat.players.get(from);if(!p||!v||v.hp<=0)return;
+ const center=new THREE.Vector3(...v.pos);center.y+=1;
+ if(center.distanceTo(p.mesh.position)>3.6||!world.hasLineOfSight(center,p.mesh.position))return;
+ if(p.kind==='health')combat.heal(from,35);else {v.grenades=Math.min(5,v.grenades+1);v.mines=Math.min(3,v.mines+1);}
+ if(from===net.id)collectPickup(p);removePickup(p);net.send('taken',{id:d.id,collector:from});
+}
+function moderationHTML() {
+ const waiting=game.state==='lobby';
+ const rule=waiting&&net.isHost?`<label><input type="checkbox" id="katanaRule" ${lobby.katana?'checked':''}> ${ui('Allow katana')}</label>`:`<strong>${(waiting?lobby.katana:game.katanaAllowed)?ui('Katana enabled'):ui('Katana disabled')}</strong>`;
+ const players=net.isHost?lobbyRows().filter(p=>p.id!==net.id).map(p=>`<div class="moderation-row"><span>${esc(p.name)}</span><button type="button" data-kick="${esc(p.id)}" aria-label="${esc(ui('Kick')+' '+p.name)}">${ui('Kick')}</button></div>`).join(''):'';
+ return `<div class="moderation" id="moderation">${rule}${players?`<h3>${ui('Manage players')}</h3>${players}`:''}</div>`;
+}
+function wireModeration() {
+ const box=hud.el.panel.querySelector('#moderation');if(!box)return;
+ box.addEventListener('click',e=>{e.stopPropagation();const b=e.target.closest('[data-kick]');if(b&&net.isHost){net.kick(b.dataset.kick);if(game.menu)showPause();}});
+ box.addEventListener('keydown',e=>e.stopPropagation());
+ box.querySelector('#katanaRule')?.addEventListener('change',e=>{if(net.isHost&&game.state==='lobby'){lobby.katana=e.target.checked;broadcastLobby();}});
+}
 
 // anything a bullet or a blade can hit besides enemies
 ctx.targets = () => [player, ...remote.values()];
@@ -106,7 +247,7 @@ ctx.raycastPlayers = (o, d, maxDist) => {
       if (!best || tt < best.dist) best = { player: t, part: t.hit[i][0], dist: tt, point: new THREE.Vector3(o.x + d.x * tt, o.y + d.y * tt, o.z + d.z * tt) };
     }
     // a raised katana sits in front of the chest: a ray that reaches it before the body is turned aside
-    if (t.blocking) {
+    if (t.blocking && !net.active) {
       _bc.set(t.center.x + t.forward.x * 0.5, t.center.y + 0.3, t.center.z + t.forward.z * 0.5); const r = 0.42;
       _v.subVectors(_bc, o); const tca = _v.dot(d);
       if (tca > 0 && tca <= maxDist) { const d2 = _v.lengthSq() - tca * tca; if (d2 <= r * r) { const tt = tca - Math.sqrt(r * r - d2); if (tt >= 0 && (!best || best.player !== t || tt < best.dist)) best = { player: t, part: 'blade', dist: tt, point: new THREE.Vector3(o.x + d.x * tt, o.y + d.y * tt, o.z + d.z * tt) }; } }
@@ -124,9 +265,10 @@ function sendPlayerDamage(target, payload, feedback = null) {
   for (const [key, hit] of pendingHits) if (now - hit.time > 5000) pendingHits.delete(key);
   if (pendingHits.size >= 256) pendingHits.delete(pendingHits.keys().next().value);
   pendingHits.set(id, { target: target.id, time: now, feedback });
-  net.sendTo(target.id, 'pdmg', { ...payload, id, life: target.lifeId });
+  combatRequest('combat-hit', { ...payload, id, target: target.id, life: target.lifeId, attackerLife: player.lifeId });
 }
 ctx.hitGrenadePlayer = (target, amount, from, explosionId, source = 'grenade') => {
+  if (net.active) return; // Online blast damage is simulated by the host.
   if (!ctx.canHurt(target) || !target.alive) return;
   sendPlayerDamage(target, { amount: Math.round(amount), from: from.toArray(), by: net.id, src: source, explosionId });
 };
@@ -134,6 +276,7 @@ ctx.hitPlayer = (t, dmg, info) => {
   if (!ctx.canHurt(t) || !t.alive) return;
   // a raised katana facing you parries a slash outright and turns some bullets aside
   // the bullet met the blade itself: it glances off, and now and then comes straight back at you
+
   if (info.part === 'blade') {
     effects.strokeBurst(info.point, INK.ORANGE, 8, 6, { life: 0.22, size: 0.035 }); audio.shieldHit(t.center);
     const ret = Math.random() < 0.4;
@@ -147,8 +290,8 @@ ctx.hitPlayer = (t, dmg, info) => {
   const facing = t.blocking ? _v.subVectors(player.center, t.center).normalize().dot(t.forward) : -1;
   const frontHit = /^(head|torso|arm|fore)/.test(info.part || '');
   // a slash is only parried by a guard that just came up and faces you
-  if (facing > 0.6 && frontHit && info.source === 'katana' && t.parryWindow) { effects.strokeBurst(info.point, INK.ORANGE, 10, 6, { life: 0.25, size: 0.04 }); audio.shieldHit(t.center); game.hitstop(0.08, 0.15); player.weapons[player.katanaIndex].cooldown = Math.max(player.weapons[player.katanaIndex].cooldown, 0.6); input.rumble(0.6, 0.3, 90); hud.tip(ui("Blocked"), 0.9); return; }
-  sendPlayerDamage(t, { amount: Math.round(dmg), from: player.center.toArray().map((v) => +v.toFixed(1)), crit: !!info.crit, src: info.source }, { point: info.point.clone(), dir: info.dir.clone() });
+  if (!net.active && facing > 0.6 && frontHit && info.source === 'katana' && t.parryWindow) { effects.strokeBurst(info.point, INK.ORANGE, 10, 6, { life: 0.25, size: 0.04 }); audio.shieldHit(t.center); game.hitstop(0.08, 0.15); player.weapons[player.katanaIndex].cooldown = Math.max(player.weapons[player.katanaIndex].cooldown, 0.6); input.rumble(0.6, 0.3, 90); hud.tip(ui("Blocked"), 0.9); return; }
+  sendPlayerDamage(t, { amount: Math.round(dmg), from: player.eye.toArray(), point: info.point.toArray(), part: info.part, crit: !!info.crit, src: info.source }, { point: info.point.clone(), dir: info.dir.clone() });
 };
 // a slash through another player's rope cuts it: their client drops the hook
 const _rp = new THREE.Vector3(), _rq = new THREE.Vector3();
@@ -160,7 +303,7 @@ ctx.cutRopes = (eye, dir, range) => {
     for (let i = 0; i <= 14; i++) {
       _rq.lerpVectors(_rp, r.gPoint, i / 14).sub(eye); const t = _rq.dot(dir); if (t < 0.3 || t > range) continue;
       const lat = Math.sqrt(Math.max(0, _rq.lengthSq() - t * t)); if (lat > 0.9) continue;
-      _rq.add(eye); effects.strokeBurst(_rq, INK.ORANGE, 10, 5, { life: 0.25, size: 0.035 }); net.sendTo(r.id, 'cut', {}); hud.tip(ui("Rope cut"), 0.9); cut = true; break;
+      _rq.add(eye); effects.strokeBurst(_rq, INK.ORANGE, 10, 5, { life: 0.25, size: 0.035 }); combatRequest('combat-cut', {target:r.id,point:_rq.toArray(),life:player.lifeId}); hud.tip(ui("Rope cut"), 0.9); cut = true; break;
     }
   }
   return cut;
@@ -219,7 +362,7 @@ function spawnPickup(kind, pos, id = null) {
 }
 function removePickup(p) { R.scene.remove(p.mesh); const i = pickups.indexOf(p); if (i >= 0) pickups.splice(i, 1); }
 function collectPickup(p) {
-  if (p.kind === 'ammo') { player.addAmmoAll(0.4); player.ordnance.resupply(); player.grenades = Math.min(player.maxGrenades, player.grenades + 1); hud.kill(ui("+Ammo · +Grenade"), 0); } else { player.hp = Math.min(player.maxHp, player.hp + 35); hud.kill(level.key === 'mexico' ? ui("Taco · +35 health") : ui("+35 health"), 0); }
+  if (p.kind === 'ammo') { player.addAmmoAll(0.4); player.ordnance.resupply(); player.grenades = Math.min(player.maxGrenades, player.grenades + 1); hud.kill(ui("+Ammo · +Grenade"), 0); } else { if(!net.active) player.hp = Math.min(player.maxHp, player.hp + 35); hud.kill(level.key === 'mexico' ? ui("Taco · +35 health") : ui("+35 health"), 0); }
   audio.pickup(); effects.strokeBurst(p.mesh.position, p.kind === 'ammo' ? INK.BLUE : INK.GREEN, 12, 4, { life: 0.3 });
 }
 function updatePickups(dt) {
@@ -228,10 +371,10 @@ function updatePickups(dt) {
     const wanted = player.alive && needsPickup(p.kind, player);
     const distance = p.mesh.position.distanceTo(player.center);
     const visible = wanted && distance < 3.5 && world.hasLineOfSight(p.mesh.position, player.center);
-    if (visible && distance >= 1.8) { const pull = 1 - Math.exp(-8 * dt); p.mesh.position.x += (player.center.x - p.mesh.position.x) * pull; p.mesh.position.z += (player.center.z - p.mesh.position.z) * pull; p.base += (player.center.y - p.base) * pull; }
+    if (!net.active && visible && distance >= 1.8) { const pull = 1 - Math.exp(-8 * dt); p.mesh.position.x += (player.center.x - p.mesh.position.x) * pull; p.mesh.position.z += (player.center.z - p.mesh.position.z) * pull; p.base += (player.center.y - p.base) * pull; }
     if (visible && distance < 1.8) {
-      collectPickup(p); removePickup(p);
-      if (net.active) net.send(net.isHost ? 'taken' : 'take', { id: p.id });
+      if(net.active) {if(!p.requested || performance.now()-p.requested>1000){p.requested=performance.now();if(net.isHost)hostPickup({id:p.id},net.id);else net.send('take',{id:p.id});}}
+      else {collectPickup(p);removePickup(p);}
       continue;
     }
     if (!net.active || net.isHost) { p.life -= dt; if (p.life <= 0) { removePickup(p); if (net.isHost) net.send('taken', { id: p.id }); } }
@@ -337,13 +480,13 @@ enemies.onKill = (e, info, over) => {
   const r = Math.random(); if (r < 0.5) spawnPickup('ammo', e.body.pos); else if (r < 0.62) spawnPickup('health', e.body.pos);
 };
 enemies.onBoss = (e) => { if (!e.alive) { hud.setBoss(null, null); game.boss = null; } else { game.boss = e; hud.setBoss(e.T.name, e.hp / e.maxHp); } };
-ctx.onOrdnance = d => { if (net.active) net.broadcast('ordnance', { ...d, map: level.key }); };
-net.on('ordnance', (d, from) => { if (d?.map === level.key) player.ordnance.receive(d, from); });
+ctx.onOrdnance = d => { if (net.active) { const msg={...d,map:level.key}; if(net.isHost&&!allowMine(msg,net.id))return;net.broadcast('ordnance',msg); } };
+net.on('ordnance', (d, from) => { if (d?.map === level.key) player.ordnance.receive(d, d.owner || from); });
 net.on('mine-sync', (d, from) => {
-  if (!net.inMatch || d?.map !== level.key) return;
-  for (const m of player.ordnance.mines) net.sendTo(from, 'ordnance', { op: 'place', id: m.id, pos: m.pos.toArray(), map: level.key });
+  if (!net.isHost || !net.inMatch || d?.map !== level.key) return;
+  for (const m of hostMines.values()) net.sendTo(from,'ordnance',{op:'place',id:m.id,pos:m.pos,map:level.key,owner:m.owner});
 });
-player.onThrow = (d) => { if (net.active) net.broadcast('nade', d); };
+player.onThrow = d => { if(net.active){if(net.isHost&&!allowGrenade(d,net.id))return;net.broadcast('nade',d);} };
 
 // ---------------- focus slash (solo only) ----------------
 const FOCUS_TIME = 2.6, FOCUS_SCALE = 0.26, FOCUS_RANGE = 24, FOCUS_MAX_CHAIN = 2, FOCUS_ARM = 0.18, DASH_SPEED = 46, KATANA_CHARGE_KILLS = 3;
@@ -429,10 +572,8 @@ function onLocalDeath() {
   hud.setScope(false);
   if (!online()) { game.state = 'dying'; game.deathT = 0; return; }
   const killer = player.lastHitBy || null; const h = player.lastHit || {};
-  const dir = h.from ? player.center.clone().sub(new THREE.Vector3().fromArray(h.from)).normalize().toArray().map((v) => +v.toFixed(2)) : null;
-  const how = killer ? howWord(h.src) : null;
-  net.broadcast('pdead', { killer, dir, over: !!(h.crit || h.amount >= 90 || h.src === 'katana'), src: h.src, crit: !!h.crit });
-  if (net.isHost) tallyDeath(net.id, killer);
+    const how = killer ? howWord(h.src) : null;
+  // The host ledger emits the death and owns score changes.
   if (game.over) return;
   game.respawnT = RESPAWN; game.respawnAt = performance.now() + RESPAWN * 1000; game.state = 'dying'; game.deathT = 0; hud.setRespawn(game.menu ? null : RESPAWN); input.exitLock();
   const kn = killer && scores.get(killer) ? scores.get(killer).name : null;
@@ -440,11 +581,11 @@ function onLocalDeath() {
 }
 function respawnLocal() {
   if (!online() || game.state !== 'dying' || performance.now() < game.respawnAt || game.over) return false;
-  game.menu = false; game.respawnT = 0; hud.hideScreen(); hud.setGameplayVisible(true); hud.setRespawn(); hud.clearMessage();
+  if (performance.now() - (game.respawnRequestAt || 0) < 500) return false;
+  game.respawnRequestAt = performance.now();
   document.activeElement?.blur(); input.suppressUntilRelease(['fire', 'jump', 'confirm']);
-  player.reset(arenaSpawn()); player.name = myName; player.lastHitBy = null; player.lastHit = null; game.state = 'play'; player.shieldT = 2; hud.tip(ui("Spawn protection · 2 s"), 1.6);
-  effects.strokeBurst(player.center, INK.BLUE, 24, 6, { life: 0.5, size: 0.03 }); audio.spawn(player.center);
   if (!input.usingGamepad) input.requestLock();
+  combatRequest('combat-respawn', { life: player.lifeId });
   return true;
 }
 hud.onRespawn = respawnLocal;
@@ -488,52 +629,23 @@ function addRemote(id, name) {
   remote.set(id, rp); return rp;
 }
 function removeRemote(id) {
+  clearHostMines(id); combat.players.delete(id);
   for (const [key, hit] of pendingHits) if (hit.target === id) pendingHits.delete(key); player.ordnance.removePeer(id); const r = remote.get(id); if (r) { r.dispose(); remote.delete(id); } lobby.players.delete(id); scores.delete(id); }
 function lobbyRows() { return [...lobby.players.entries()].map(([id, p]) => ({ id, name: p.name })); }
-function broadcastLobby() { net.send('lobby', { players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, shown: net.aliasCode || net.code }); renderLobby(); }
+function broadcastLobby() { net.send('lobby', { players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, katana: lobby.katana, shown: net.aliasCode || net.code }); renderLobby(); }
 const inMatch = () => ['play', 'dying', 'over'].includes(game.state);
 net.onPeerLeave = (id) => { const nm = (lobby.players.get(id) || {}).name; removeRemote(id); broadcastLobby(); if (inMatch()) { hud.kill((nm || ui("Player")) + ui(" left"), 0); sendScores(); } };
-net.onDisconnect = () => { if (lobby.order && lobby.order.some((id) => id !== lobby.hostId)) migrateHost(); else leaveOnline(ui("The host left")); };
-// ---- host transfer: when the host goes, the earliest-joined player left takes over on a generation
-// code (the old code is slow to free up on the signalling server); everyone else rejoins there
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-let migrating = false;
-async function migrateHost() { if (migrating) return; migrating = true; try { await _migrateHost(); } finally { migrating = false; } }
-async function _migrateHost() {
-  const oldHost = lobby.hostId, myId = net.id; const gen = (lobby.gen || 0) + 1; lobby.gen = gen;
-  const base = (lobby.code || net.code || '').replace(/-\d+$/, ''); const code = base + '-' + gen;
-  const roster = (lobby.order || []).filter((id) => id !== oldHost && lobby.players.has(id)); if (!roster.length || !base) { leaveOnline(ui("The host left")); return; }
-  const successor = roster[0]; const wasInMatch = inMatch();
-  if (oldHost) { const r = remote.get(oldHost); if (r) r.dispose(); remote.delete(oldHost); lobby.players.delete(oldHost); scores.delete(oldHost); }
-  hud.message(ui("The host left"), successor === myId ? ui("You are the new host") : ui("Connecting to the new host…"), 2.6);
-  if (successor === myId) {
-    let ok = false;
-    for (let tries = 0; tries < 2 && !ok; tries++) { try { await net.host({ isPublic: lobby.isPublic, code }); ok = true; } catch (e) { await sleep(800); } }
-    if (!ok) { leaveOnline(ui("Could not take over the lobby")); return; }
-    const mine = lobby.players.get(myId) || { name: myName }; lobby.players.delete(myId); lobby.players.set(net.id, mine);
-    const ms = scores.get(myId); scores.delete(myId); if (ms) scores.set(net.id, ms);
-    lobby.hostId = net.id; lobby.code = code; lobby.order = [net.id, ...roster.filter((id) => id !== myId)]; net.accepting = true; game.clockStarted = clockRunning || matchLeft < FFA_TIME;
-    net.onAlias = () => { broadcastLobby(); hud.kill(ui("Room code ") + base + ui(" reopened"), 0); }; net.claimAlias(base);
-    if (game.state === 'over') { /* the results stay up; the host timer now runs here */ } else if (wasInMatch) { if (game.state !== 'play' && game.state !== 'dying') game.state = 'play'; refreshScoreHud(); } else { game.state = 'lobby'; screen = 'lobby'; showStart(); }
-    broadcastLobby();
-  } else {
-    await sleep(1200);
-    const deadline = performance.now() + 20000; let joined = false;
-    while (!joined && performance.now() < deadline) { try { await net.join(code, { name: myName, prev: myId }); joined = true; } catch (e) { await sleep(1200); } }
-    if (!joined) { leaveOnline(ui("The host left and reconnection failed")); return; }
-    lobby.code = code; if (!wasInMatch) { game.state = 'lobby'; screen = 'lobby'; showStart(); }
-  }
-}
+net.onDisconnect = () => leaveOnline(ui('The host left'));
 net.on('refused', (d) => leaveOnline(friendlyError(d.reason)));
 net.hostName = myName;
 net.onPeerJoin = (from, meta) => {
-  const name = String(meta && meta.name || 'doodle').slice(0, 14);
-  if (meta && meta.prev && meta.prev !== from) { const sc = scores.get(meta.prev); if (sc) { scores.delete(meta.prev); scores.set(from, sc); } const r = remote.get(meta.prev); if (r) r.dispose(); remote.delete(meta.prev); lobby.players.delete(meta.prev); if (lobby.order) lobby.order = lobby.order.filter((id) => id !== meta.prev); }
+  const name = (typeof meta?.name === 'string' ? meta.name : 'doodle').slice(0, 14);
+
   lobby.players.set(from, { name }); addRemote(from, name); broadcastLobby();
-  if (game.state === 'play' || game.state === 'dying') { if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn: farthestSpawnIndex(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
+  if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, katana: lobby.katana, vitals: combat.views(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
 };
 net.on('lobby', (d) => {
-  lobby.hostId = d.hostId; lobby.isPublic = !!d.isPublic; lobby.code = net.code; lobby.shown = d.shown || net.code; if (d.map) lobby.map = knownMap(d.map); lobby.order = d.players.map((p) => p.id); lobby.players.clear();
+  lobby.katana = d.katana !== false; lobby.hostId = d.hostId; lobby.isPublic = !!d.isPublic; lobby.code = net.code; lobby.shown = d.shown || net.code; if (d.map) lobby.map = knownMap(d.map); lobby.order = d.players.map((p) => p.id); lobby.players.clear();
   for (const p of d.players) lobby.players.set(p.id, { name: p.name });
   for (const p of d.players) if (p.id !== net.id) addRemote(p.id, p.name);
   for (const id of [...remote.keys()]) if (!lobby.players.has(id)) removeRemote(id);
@@ -541,56 +653,30 @@ net.on('lobby', (d) => {
   renderLobby();
 });
 net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || ui("Player")) + ui(" left"), 0); renderLobby(); });
-net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
+net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; lobby.katana = d.katana !== false; if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); for (const v of d.vitals || []) applyVitals(v); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
 net.on('end', (d) => endMatch(d));
 net.on('backtolobby', () => { if (!net.isHost) toLobbyScreen(); });
 net.on('pickup', (d) => { if (!net.isHost) spawnPickup(d.kind, new THREE.Vector3().fromArray(d.pos), d.id); });
-net.on('taken', (d) => { const p = pickups.find((x) => x.id === d.id); if (p) removePickup(p); });
-net.on('take', (d) => { if (!net.isHost) return; const p = pickups.find((x) => x.id === d.id); if (p) { removePickup(p); net.send('taken', { id: d.id }); } });
+net.on('taken',d=>{const p=pickups.find(x=>x.id===d.id);if(p){if(d.collector===net.id)collectPickup(p);removePickup(p);}});
+net.on('take',(d,from)=>{if(net.isHost)hostPickup(d,from);});
 net.on('ps', (d, from) => { const r = remote.get(from); if (r) { r.push(d, performance.now() / 1000); r.lastSeen = performance.now(); } });
-const appliedExplosions = new Set(), damageReceipts = new Map();
-net.on('pdmg', (d, from) => {
-  if (!online() || !remote.has(from) || !d || typeof d.id !== 'string' || d.id.length > 180 || !Number.isFinite(d.amount) || d.amount <= 0 || d.amount > 1000 || (d.from && (!Array.isArray(d.from) || d.from.length !== 3 || !d.from.every(Number.isFinite)))) return;
-  const key = `${from}:${d.id}`;
-  if (damageReceipts.has(key)) { net.sendTo(from, 'phit', damageReceipts.get(key)); return; }
-  let reason = !player.alive || game.state !== 'play' ? 'dead' : d.life !== player.lifeId ? 'stale' : player.shieldT > 0 ? 'protected' : null;
-  if (d.explosionId) {
-    const explosion = `${from}:${d.explosionId}`;
-    if (appliedExplosions.has(explosion)) reason = 'duplicate';
-    appliedExplosions.add(explosion);
-    if (appliedExplosions.size > 512) appliedExplosions.delete(appliedExplosions.values().next().value);
-  }
-  const before = player.hp;
-  if (!reason) {
-    player.lastHitBy = from; player.lastHit = { from: d.from || null, crit: !!d.crit, amount: d.amount, src: d.src };
-    player.takeDamage(d.amount, d.from ? new THREE.Vector3().fromArray(d.from) : null);
-  }
-  const receipt = { id: d.id, amount: reason ? 0 : before - player.hp, killed: !reason && !player.alive, crit: !!d.crit, reason };
-  damageReceipts.set(key, receipt);
-  if (damageReceipts.size > 512) damageReceipts.delete(damageReceipts.keys().next().value);
-  net.sendTo(from, 'phit', receipt);
+net.on('combat-result', (d, from) => {
+  if (from !== net.hostId) return;
+  acceptHitResult(d);
 });
-net.on('phit', (d, from) => {
+function acceptHitResult(d) {
+  const from = d.target;
   const hit = pendingHits.get(d?.id);
   if (!hit || hit.target !== from) return;
   pendingHits.delete(d.id);
   if (!online() || !inMatch() || performance.now() - hit.time > 5000) return;
-  if (!(d.amount > 0)) { if (d.reason === 'protected') hud.tip(ui('Spawn protected'), .8); return; }
+  if (!(d.amount > 0)) { if (d.reason === 'protected') hud.tip(ui('Spawn protected'), .8); if(d.reason==='blocked')hud.tip(ui('Blocked'),.8); return; }
   hud.hitmarker(!!d.killed, !!d.crit);
   const target = remote.get(from);
   if (target) { audio.hitEnemy(target.center); target.flash(); }
   if (hit.feedback) effects.blood(hit.feedback.point, hit.feedback.dir, clamp(.4 + d.amount / 80, .4, 1.6), { ink: INK.RED });
-});
-net.on('pdead', (d, from) => {
-  const r = remote.get(from); const vn = r ? r.name : ui("Player"); const kn = d.killer && scores.get(d.killer) ? scores.get(d.killer).name : null;
-  if (r) { r.ragdoll(d.dir ? new THREE.Vector3().fromArray(d.dir) : null, !!d.over); audio.enemyDie(r.center); }
-  const weapon = howWord(d.src);
-  const how = weapon ? ' · ' + weapon + (d.crit ? ui(" Headshot") : '') : '';
-  if (d.killer === net.id) { game.kills++; game.addScore(100, ui("Eliminated: ") + vn + how); audio.kill(true); }
-  else hud.kill(kn ? kn + ui(" eliminated ") + vn + how : vn + ui(" fell off the page"), 0);
-  if (net.isHost) tallyDeath(from, d.killer);
-});
-net.on('nade', (d, from) => { if (d) player.throwGrenade({ ...d, id: `${from}:${d.id || ''}` }); });
+}
+net.on('nade', (d, from) => { if (d) player.throwGrenade({ ...d, owner: from, id: `${from}:${d.id || ''}` }); });
 net.on('brk', (d) => { const br = level.breakables[d.id]; if (br) breakProp(br, null, false); });
 net.on('parry', (d) => { audio.shieldHit(player.center); input.rumble(0.35, 0.3, 60); effects.strokeBurst(player.eye.clone().addScaledVector(player.forward, 0.5), INK.ORANGE, 8, 5, { life: 0.2, size: 0.03 }); hud.kill(d.ret ? ui("Returned to sender") : ui("Deflected"), d.ret ? 25 : 0); });
 net.on('shots', (d, from) => {
@@ -628,7 +714,7 @@ function idleUpdate(dt) {
   // the host also clears out a client that has sat idle past the limit, in case its tab cannot do it itself
   if (net.isHost) for (const [id, r] of remote) if (r.idle && r.idleSince && performance.now() / 1000 - r.idleSince > limit - IDLE_FLAG + 15) { net.sendTo(id, 'kick', { reason: 'idle' }); const c = net.conns.get(id); setTimeout(() => { try { c && c.close(); } catch (e) { /* ignore */ } }, 500); }
 }
-net.on('kick', (d) => { const back = String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(d?.reason === 'idle' ? ui("Removed for inactivity") : ui("Removed from the room")); lobby.rejoinCode = back; if (back) showStart(); });
+net.on('kick', (d) => { const back = d?.reason === 'idle' ? String(net.aliasCode || net.code || '').replace(/-\d+$/, '') : null; leaveOnline(d?.reason === 'idle' ? ui('Removed for inactivity') : ui('Removed from the room')); lobby.rejoinCode = back; showStart(); });
 const sceneClock = new SceneClock();
 let scenePingT = 0, sceneHost = null;
 net.on('scene-ping', (d, from) => { if (net.isHost && Number.isInteger(d?.id)) net.sendTo(from, 'scene-pong', { id: d.id, time: sceneClock.time() }); });
@@ -636,14 +722,19 @@ net.on('scene-pong', (d, from) => { if (!net.isHost && from === net.hostId) scen
 Object.assign(window.__game, { sceneClock });
 let syncTick = 0;
 function netUpdate(dt) {
+  if (net.isHost && online() && inMatch() && !game.over) { combat.tick(); tickHostMines(dt); combatSyncT -= dt; if (combatSyncT <= 0) { combatSyncT = .2; for (const v of combat.views()) publishVitals(v); } }
   idleUpdate(dt);
   if (!net.active) return; const now = performance.now() / 1000; syncTick++;
   if (sceneHost !== net.hostId) { sceneHost = net.hostId; sceneClock.changeHost(); scenePingT = 0; }
   if (!net.isHost) { scenePingT -= dt; if (scenePingT <= 0) { scenePingT = 1; net.send('scene-ping', sceneClock.request()); } }
   for (const r of remote.values()) r.update(dt, now);
   // a connection that died without saying so leaves a figure standing around: drop anyone silent too long
-  if (inMatch() && !migrating) for (const [id, r] of remote) { if (r.lastSeen && performance.now() - r.lastSeen > 9000) { if (!net.isHost && id === net.hostId) { net.leave(); migrateHost(); break; } const nm = r.name; removeRemote(id); hud.kill(nm + ui(" disconnected"), 0); if (net.isHost) { const c = net.conns.get(id); if (c) { try { c.close(); } catch (e) { /* ignore */ } net.conns.delete(id); } net.send('leave', { id }); broadcastLobby(); sendScores(); } } }
-  if (syncTick % 3 === 0 && inMatch()) net.send('ps', encodeLocal(player, player.weaponIndex, { firing: player.firing, idle: input.idleSeconds > IDLE_FLAG }), true);
+  if (inMatch()) for (const [id, r] of remote) { if (r.lastSeen && performance.now() - r.lastSeen > 9000) { if (!net.isHost && id === net.hostId) { leaveOnline(ui('The host left')); break; } const nm = r.name; removeRemote(id); hud.kill(nm + ui(" disconnected"), 0); if (net.isHost) { const c = net.conns.get(id); if (c) { try { c.close(); } catch (e) { /* ignore */ } net.conns.delete(id); } net.send('leave', { id }); broadcastLobby(); sendScores(); } } }
+  if (syncTick % 3 === 0 && inMatch()) {
+    let snap = encodeLocal(player, player.weaponIndex, { firing: player.firing, idle: input.idleSeconds > IDLE_FLAG });
+    if (net.isHost) {snap = combat.snapshot(net.id, snap);if(!snap){const p=combat.players.get(net.id);if(p)applyVitals({...combat.view(p),correction:true});}}
+    if (snap) net.send('ps', snap, true);
+  }
   if (shotQueue.length) net.broadcast('shots', { k: player.weapon.kind, e: shotQueue.splice(0) });
   if (net.isHost && inMatch() && remote.size > 0) game.clockStarted = true;
   const clockOn = inMatch() && !game.over && (net.isHost ? !!game.clockStarted : clockRunning);
@@ -675,6 +766,7 @@ async function quickPlay() {
 }
 function friendlyError(err) {
   const m = String(err && err.message || err || ''); if (!m) return ui("Something went wrong");
+  if (/removed from this room/.test(m)) return ui('Removed from the room');
   if (/networking library/.test(m)) return ui("Networking could not load · Check your connection and refresh.");
   if (/timed out|signalling/.test(m)) return ui("Could not reach matchmaking · Check your connection.");
   if (/no lobby with that code/.test(m)) return ui("Room not found · Check the code with your friend.");
@@ -790,7 +882,7 @@ function lobbyHTML() {
       <div class="plist">${rows.map((p) => `<div class="${p.id === lobby.hostId ? 'host' : ''}${p.id === net.id ? ' me' : ''}"><span>${esc(p.name)}</span><span>${p.id === net.id ? ui("you") : ''}</span></div>`).join('')}</div>
       <div class="row">${startButton}<button type="button" class="alt" id="leaveBtn">${ui('Leave')}</button></div>
       <div class="status" id="status">${esc(lobby.status || '')}</div><div class="hint">${ui('Only the host can start the match')} · ${n < 2 ? ui("You can also join after the match starts") : n + ui(" players ready")}</div>
-    </div>`;
+    </div>` + moderationHTML();
 }
 let lobbyList = null, listBusy = false;
 function lobbyListHTML() {
@@ -807,7 +899,7 @@ async function refreshLobbies() {
 function wireOnline() {
   const box = hud.el.panel.querySelector('#online'); if (!box) return;
   box.addEventListener('click', (e) => e.stopPropagation()); box.addEventListener('keydown', (e) => e.stopPropagation());
-  const q = (id) => box.querySelector('#' + id); wireName(box);
+  const q = (id) => box.querySelector('#' + id); wireName(box); wireModeration();
   if (q('quickBtn')) q('quickBtn').addEventListener('click', () => { lockButtons(box); quickPlay(); });
   if (q('createBtn')) q('createBtn').addEventListener('click', () => { lockButtons(box); createLobby(box.querySelector('input[name=vis]:checked').value === 'public'); });
   if (q('joinBtn')) { q('joinBtn').addEventListener('click', () => { const c = q('codeBox').value.trim().toUpperCase(); if (!c) { setStatus(ui("Enter the room code from your friend.")); return; } lockButtons(box); joinLobby(c); }); q('codeBox').addEventListener('keydown', (e) => { if (e.key === 'Enter') q('joinBtn').click(); }); }
@@ -841,7 +933,7 @@ function showStart() {
 function showPause() {
   if (online()) {
     hud.showScreen(ui`<h1>Menu</h1><h2>Free for all · Lobby ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</h2><div class="scoreboard">${sortedScores().map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}</div>${CONTROLS_HTML}${settingsHTML()}<div class="online" id="online"><div class="row"><button type="button" class="alt" id="leaveBtn">Leave match</button></div></div><div class="go">Click to resume or press ${hud.key('confirm')} </div>`);
-    wireSettings(); wireOnline(); return;
+    hud.el.panel.insertAdjacentHTML('beforeend',moderationHTML()); wireSettings(); wireOnline(); return;
   }
   hud.showScreen(ui`<h1>Paused</h1><h2>${mapName(level.key)} · Wave ${game.wave} · Score ${game.score}</h2>${CONTROLS_HTML}${settingsHTML()}${menuBtnHTML()}<div class="go">Click to resume or press ${hud.key('confirm')} </div>`);
   wireSettings(); wireMenuBtn();
@@ -875,10 +967,12 @@ function hostStart() {
   // deal everyone a different spot, shuffled so the same people do not always start together
   setArena(true); const order = spawnSpots().map((_, i) => i); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
   const spawns = {}; [...lobby.players.keys()].forEach((id, i) => { spawns[id] = order[i % order.length]; });
-  net.send('start', { spawns, map: lobby.map || mapKey }); startMatch(false, spawns[net.id]); sendScores();
+  hostMines.clear();approvedGrenades.clear();startMatch(false, spawns[net.id]); combat.clear(lobby.katana);
+  for (const id of lobby.players.keys()) applyVitals(combat.add(id, spawnSpots()[spawns[id]].toArray()));
+  net.send('start', { spawns, map: lobby.map || mapKey, katana: lobby.katana, vitals: [...combat.players.values()].map(p => combat.view(p, true)) }); sendScores();
 }
 function startMatch(late, spawnIdx) {
-  pendingHits.clear();
+  pendingHits.clear(); deathEvents.clear(); game.katanaAllowed = lobby.katana !== false;
   net.inMatch = true; game.mode = 'ffa'; setArena(true); resetGame(); matchLeft = FFA_TIME; clockT = 0; game.clockStarted = false;
   // nobody sends snapshots in the lobby, so the silence clock restarts here or the sweep would drop everyone
   for (const r of remote.values()) r.lastSeen = performance.now();
@@ -967,7 +1061,7 @@ function step(now) {
   audio.setListener(player.eye, player.right);
   const w = player.weapon; if (w.isGun) hud.setAmmo(w.mag, w.reserveText, w.magSize, w.reloading); else hud.setKatana();
   hud.setSupport(player.ordnance);
-  hud.setSlots(player.weapons.map((wp, i) => ({ name: wp.name, active: i === player.weaponIndex, ammo: wp.isGun ? wp.mag + '/' + wp.reserveText : '∞', empty: wp.isGun && !wp.infiniteReserve && wp.mag === 0 && wp.reserve === 0 })));
+  hud.setSlots(player.weapons.map((wp, i) => ({ name: player.weaponAllowed(i)?wp.name:ui('Katana disabled'), active: i === player.weaponIndex, ammo: !player.weaponAllowed(i)?'—':wp.isGun ? wp.mag + '/' + wp.reserveText : '∞', empty: !player.weaponAllowed(i) || wp.isGun && !wp.infiniteReserve && wp.mag === 0 && wp.reserve === 0 })));
   hud.setGrenades(player.grenades); hud.setGrappleStamina(player.grapStam); hud.setHealth(player.hp, player.maxHp); hud.setSpread(w.spreadPx); hud.update(dt);
   if (online()) hud.setFocusMeter(playing, player.grapStam, false, 'Grapple');
   else hud.setFocusMeter(playing && (w.kind === 'katana' || game.katanaStreak > 0 || game.focus.active), game.focus.active ? 1 : clamp(game.katanaStreak / KATANA_CHARGE_KILLS, 0, 1), game.focus.active, 'Katana');

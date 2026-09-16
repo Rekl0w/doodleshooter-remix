@@ -168,18 +168,11 @@ try {
     const root = document.createElement('div'), hud = new HUD(root);
     hud.kill('<b>literal player name</b>', 10);
     test('kill feed treats player text as text, not HTML', !root.querySelector('#killfeed b') && root.querySelector('#killfeed').textContent.includes('<b>'));
-    // Registered network receiver: duplicate grenade damage is ignored, malformed damage rejected.
-    const live = window.__game; const savedState = live.game.state, savedMode = live.game.mode; live.game.mode = 'ffa'; live.remote.set('fixture', {}); live.game.state = 'play'; live.player.hp = 120; live.player.alive = true; live.player.shieldT = 0;
-    const receive = live.net.handlers.get('pdmg');
-    receive({ id: 'grenade-' + Math.random(), life: live.player.lifeId, amount: 30, from: [0, 1, 0], src: 'grenade', explosionId: 'test-event' }, 'fixture');
-    receive({ id: 'grenade-' + Math.random(), life: live.player.lifeId, amount: 30, from: [0, 1, 0], src: 'grenade', explosionId: 'test-event' }, 'fixture');
-    test('network damage receiver deduplicates explosion IDs', live.player.hp === 90, live.player.hp);
-    receive({ id: 'negative', life: live.player.lifeId, amount: -10 }, 'fixture'); receive({ id: 'nan', life: live.player.lifeId, amount: NaN }, 'fixture');
-    test('malformed damage cannot heal or poison health', live.player.hp === 90);
-    receive({ id: 'mine-' + Math.random(), life: live.player.lifeId, amount: 20, from: [0, 1, 0], src: 'mine', explosionId: 'mine-event' }, 'fixture');
-    receive({ id: 'mine-' + Math.random(), life: live.player.lifeId, amount: 20, from: [0, 1, 0], src: 'mine', explosionId: 'mine-event' }, 'fixture');
-    test('network receiver deduplicates mine damage too', live.player.hp === 70);
-    live.game.state = savedState; live.game.mode = savedMode; live.remote.delete('fixture');
+    // Legacy client health/death packets are no longer registered.
+    const live=window.__game;
+    test('legacy client damage handler removed', !live.net.handlers.has('pdmg'));
+    test('legacy client death handler removed', !live.net.handlers.has('pdead'));
+    test('host combat handlers registered', live.net.handlers.has('combat-hit') && live.net.handlers.has('combat-respawn'));
     return out;
   });
   for (const result of results) check(`${result.name}${result.pass ? '' : ` (${JSON.stringify(result.detail)})`}`, result.pass);
