@@ -78,17 +78,18 @@ Dust II is based on **Counter-Strike / Valve** references: [Valve's Dust II pres
 1. Everyone opens the same up-to-date game URL.
 2. Choose **ONLINE → Private · Friends → Create room**.
 3. Share the room code; friends enter it and press **Join**.
-4. The **host** chooses the map, sets **Allow katana**, and presses **Start match**. Guests wait for the host; they cannot start the match or change the map.
+4. The **host** chooses the map, sets **Allow katana** and the **Kill target** (1–999), and presses **Start match**. Guests wait for the host; they cannot start the match or change the map.
 
 After the map is selected, each player can choose their own visual style below the map cards.
 
-Up to **25 players**, with a target of **20 kills**. Joining a match already in progress is supported. Use **Quick play** to find public rooms.
+Up to **25 players**, with a host-selected target of **1–999 kills** (default: 20). Joining a match already in progress is supported. Use **Quick play** to find public rooms.
 
 PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v11` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
 
 ### Moderation and temporary anti-cheat
 
 - The host can **Kick** a player from the lobby or the in-match **Esc → Menu → Manage players** panel. Removing a player closes their connection and removes them from every roster. The current room remembers their peer ID and browser ID; changing only their name does not bypass removal.
+- **Kill target** is set by the host before each round and stays fixed during the match. The chosen target is shown to all players, including late joiners. The existing 10-minute match timer still applies.
 - **Allow katana** is set before each round. Disabled katana is skipped by weapon cycling and quick melee, and the host rejects katana damage. Late joiners inherit the same rule.
 - The host owns health, spawn protection, accepted damage, deaths, scores and respawns. Hit proposals are checked for weapon damage, cadence, replay, life generation, range and cover. Grenades and mines damage players through host simulation; health pickups and regeneration also use the host ledger.
 - A modified guest cannot stay alive for everyone else by ignoring damage or forging health, death, invisibility or host-control messages. Killing the guest still updates the host score, and attacks from their dead life are rejected.
@@ -133,6 +134,7 @@ npm install --no-save --package-lock=false playwright
 npx playwright install chromium
 node tests/host-combat.mjs
 node tests/authority.mjs
+node tests/match-rules.mjs
 node tests/run.mjs
 node tests/maps.mjs
 node tests/expansion.mjs

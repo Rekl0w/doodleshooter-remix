@@ -1,5 +1,7 @@
 // Turkish UI translations. Keep {0}, {1}, ... placeholders intact.
 export default {
+  "Free for all · Target: {0} kills · {1}/{2} players": "Herkes tek · Hedef: {0} öldürme · {1}/{2} oyuncu",
+  "Kill target": "Öldürme hedefi",
   "Allow katana": "Katanaya izin ver",
   "Katana enabled": "Katana açık",
   "Katana disabled": "Katana kapalı",

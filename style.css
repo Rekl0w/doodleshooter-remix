@@ -300,3 +300,7 @@ html[lang="tr"] .online .plist .host span:first-child::after { content: ' · oda
 .moderation h3 { margin: 10px 0 5px; font-size: 18px; }
 .moderation-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px; }
 .moderation button { font: inherit; color: var(--red); background: var(--paper); border: 1px solid var(--red); border-radius: 5px; padding: 4px 12px; cursor: pointer; }
+
+.moderation .kill-target { margin-top: 12px; flex-wrap: wrap; }
+.moderation .kill-target input { width: 88px; height: auto; box-sizing: border-box; padding: 4px 8px; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--ink); border-radius: 4px; }
+.moderation .kill-target small { opacity: .7; }

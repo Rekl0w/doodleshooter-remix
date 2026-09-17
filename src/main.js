@@ -69,7 +69,7 @@ function applySettings() {
   localStorage.setItem('doodle_sens', String(settings.sens)); localStorage.setItem('doodle_invert', settings.invert ? '1' : '0');
 }
 // ---------------- game state ----------------
-const FFA_TARGET = 20, FFA_TIME = 600, RESPAWN = 2.5;
+const DEFAULT_KILL_TARGET = 20, FFA_TIME = 600, RESPAWN = 2.5;
 let matchLeft = FFA_TIME, clockT = 0, clockRunning = false;
 const mmss = (t) => { t = Math.max(0, Math.ceil(t)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
 const game = ctx.game = {
@@ -86,7 +86,10 @@ player.name = myName;
 const net = new Net();
 const nameplates = new Nameplates(hud.root);
 const remote = new Map();      // peer id -> RemotePlayer
-const lobby = { katana: true, players: new Map(), hostId: null, isPublic: true, status: '', code: '', map: null };
+const lobby = { killTarget: DEFAULT_KILL_TARGET, katana: true, players: new Map(), hostId: null, isPublic: true, status: '', code: '', map: null };
+const validKillTarget = n => Number.isInteger(n) && n >= 1 && n <= 999;
+const normalizeKillTarget = n => validKillTarget(n) ? n : DEFAULT_KILL_TARGET;
+const matchTarget = () => online() && ['play', 'dying', 'over'].includes(game.state) ? normalizeKillTarget(game.killTarget) : normalizeKillTarget(lobby.killTarget);
 const scores = new Map();      // peer id -> { name, kills, deaths }
 let screen = 'main';           // which start-screen panel is showing: main | online | lobby
 window.__game = { ctx, game, player, enemies, nav, world, level, hud, effects, input, net, remote, lobby, scores };
@@ -221,13 +224,22 @@ function hostPickup(d,from) {
 function moderationHTML() {
  const waiting=game.state==='lobby';
  const rule=waiting&&net.isHost?`<label><input type="checkbox" id="katanaRule" ${lobby.katana?'checked':''}> ${ui('Allow katana')}</label>`:`<strong>${(waiting?lobby.katana:game.katanaAllowed)?ui('Katana enabled'):ui('Katana disabled')}</strong>`;
+ const target=waiting&&net.isHost?`<label class="kill-target" for="killTarget">${ui('Kill target')}<input type="number" id="killTarget" min="1" max="999" step="1" required value="${normalizeKillTarget(lobby.killTarget)}"><small>1–999</small></label>`:'';
  const players=net.isHost?lobbyRows().filter(p=>p.id!==net.id).map(p=>`<div class="moderation-row"><span>${esc(p.name)}</span><button type="button" data-kick="${esc(p.id)}" aria-label="${esc(ui('Kick')+' '+p.name)}">${ui('Kick')}</button></div>`).join(''):'';
- return `<div class="moderation" id="moderation">${rule}${players?`<h3>${ui('Manage players')}</h3>${players}`:''}</div>`;
+ return `<div class="moderation" id="moderation">${rule}${target}${players?`<h3>${ui('Manage players')}</h3>${players}`:''}</div>`;
 }
 function wireModeration() {
  const box=hud.el.panel.querySelector('#moderation');if(!box)return;
  box.addEventListener('click',e=>{e.stopPropagation();const b=e.target.closest('[data-kick]');if(b&&net.isHost){net.kick(b.dataset.kick);if(game.menu)showPause();}});
  box.addEventListener('keydown',e=>e.stopPropagation());
+ box.querySelector('#killTarget')?.addEventListener('change',e=>{
+  if(!net.isHost||game.state!=='lobby')return;
+  const value=e.target.valueAsNumber;
+  if(!validKillTarget(value)){e.target.reportValidity();e.target.value=normalizeKillTarget(lobby.killTarget);return;}
+  lobby.killTarget=value;broadcastLobby(false);
+  // Keep the focused control intact so clicking Start after typing works once.
+  hud.el.panel.querySelector('h2').textContent=ui`Free for all · Target: ${value} kills · ${lobby.players.size}/${net.maxPlayers} players`;
+ });
  box.querySelector('#katanaRule')?.addEventListener('change',e=>{if(net.isHost&&game.state==='lobby'){lobby.katana=e.target.checked;broadcastLobby();}});
 }
 
@@ -601,18 +613,18 @@ function refreshScoreHud() {
   if (!online()) return;
   const rows = sortedScores(); const top = rows.slice(0, 3); const myIdx = rows.findIndex(([id]) => id === net.id);
   if (myIdx >= 3) top.push(rows[myIdx]);
-  hud.setPvpScore(top.map(([id, sc]) => `<div class="row${id === net.id ? ' me' : ''}"><span class="rank">${rows.findIndex(([x]) => x === id) + 1}.</span><span>${esc(sc.name)}${id === net.id ? ui(" (you)") : ''}</span><b>${sc.kills}</b></div>`).join('') + ui`<div class="target">Target: ${FFA_TARGET} kills</div>`);
+  hud.setPvpScore(top.map(([id, sc]) => `<div class="row${id === net.id ? ' me' : ''}"><span class="rank">${rows.findIndex(([x]) => x === id) + 1}.</span><span>${esc(sc.name)}${id === net.id ? ui(" (you)") : ''}</span><b>${sc.kills}</b></div>`).join('') + ui`<div class="target">Target: ${matchTarget()} kills</div>`);
   hud.setModifier('');
   if (!hud.el.board.hidden) hud.setBoard(boardHTML());
 }
 function boardHTML(title = ui("Free for all")) {
   const rows = sortedScores();
-  return ui`<h3>${title}</h3>${rows.map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}${id === net.id ? ui(" (you)") : ''}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}<div class="foot">Target: ${FFA_TARGET} kills · Remaining ${mmss(matchLeft)} · Lobby ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</div>`;
+  return ui`<h3>${title}</h3>${rows.map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}${id === net.id ? ui(" (you)") : ''}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}<div class="foot">Target: ${matchTarget()} kills · Remaining ${mmss(matchLeft)} · Lobby ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</div>`;
 }
 function checkWin() {
   if (!net.isHost || !online() || game.over) return;
   let winner = null;
-  for (const [id, s] of scores) if (s.kills >= FFA_TARGET) winner = { id, name: s.name };
+  for (const [id, s] of scores) if (s.kills >= matchTarget()) winner = { id, name: s.name };
   if (winner) { net.send('end', winner); endMatch(winner); }
 }
 function endMatch(winner) {
@@ -632,7 +644,7 @@ function removeRemote(id) {
   clearHostMines(id); combat.players.delete(id);
   for (const [key, hit] of pendingHits) if (hit.target === id) pendingHits.delete(key); player.ordnance.removePeer(id); const r = remote.get(id); if (r) { r.dispose(); remote.delete(id); } lobby.players.delete(id); scores.delete(id); }
 function lobbyRows() { return [...lobby.players.entries()].map(([id, p]) => ({ id, name: p.name })); }
-function broadcastLobby() { net.send('lobby', { players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, katana: lobby.katana, shown: net.aliasCode || net.code }); renderLobby(); }
+function broadcastLobby(render = true) { net.send('lobby', { players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, katana: lobby.katana, killTarget: normalizeKillTarget(lobby.killTarget), shown: net.aliasCode || net.code }); if(render)renderLobby(); }
 const inMatch = () => ['play', 'dying', 'over'].includes(game.state);
 net.onPeerLeave = (id) => { const nm = (lobby.players.get(id) || {}).name; removeRemote(id); broadcastLobby(); if (inMatch()) { hud.kill((nm || ui("Player")) + ui(" left"), 0); sendScores(); } };
 net.onDisconnect = () => leaveOnline(ui('The host left'));
@@ -642,10 +654,10 @@ net.onPeerJoin = (from, meta) => {
   const name = (typeof meta?.name === 'string' ? meta.name : 'doodle').slice(0, 14);
 
   lobby.players.set(from, { name }); addRemote(from, name); broadcastLobby();
-  if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, katana: lobby.katana, vitals: combat.views(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
+  if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, katana: lobby.katana, killTarget: game.killTarget, vitals: combat.views(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
 };
 net.on('lobby', (d) => {
-  lobby.katana = d.katana !== false; lobby.hostId = d.hostId; lobby.isPublic = !!d.isPublic; lobby.code = net.code; lobby.shown = d.shown || net.code; if (d.map) lobby.map = knownMap(d.map); lobby.order = d.players.map((p) => p.id); lobby.players.clear();
+  lobby.katana = d.katana !== false; lobby.killTarget = normalizeKillTarget(d.killTarget); lobby.hostId = d.hostId; lobby.isPublic = !!d.isPublic; lobby.code = net.code; lobby.shown = d.shown || net.code; if (d.map) lobby.map = knownMap(d.map); lobby.order = d.players.map((p) => p.id); lobby.players.clear();
   for (const p of d.players) lobby.players.set(p.id, { name: p.name });
   for (const p of d.players) if (p.id !== net.id) addRemote(p.id, p.name);
   for (const id of [...remote.keys()]) if (!lobby.players.has(id)) removeRemote(id);
@@ -653,7 +665,7 @@ net.on('lobby', (d) => {
   renderLobby();
 });
 net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || ui("Player")) + ui(" left"), 0); renderLobby(); });
-net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; lobby.katana = d.katana !== false; if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); for (const v of d.vitals || []) applyVitals(v); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
+net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; lobby.katana = d.katana !== false; lobby.killTarget = normalizeKillTarget(d.killTarget); if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); for (const v of d.vitals || []) applyVitals(v); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
 net.on('end', (d) => endMatch(d));
 net.on('backtolobby', () => { if (!net.isHost) toLobbyScreen(); });
 net.on('pickup', (d) => { if (!net.isHost) spawnPickup(d.kind, new THREE.Vector3().fromArray(d.pos), d.id); });
@@ -858,7 +870,7 @@ function mainHTML() {
     ${mapHTML(mapKey, true) + `<button type="button" class="play-map" id="playMapBtn">${ui('Play selected map')}</button>`}${CONTROLS_HTML}${settingsHTML()}${checkpointHTML()}${best ? ui`<div class="beststat">Best score：${best}</div>` : ''}`;
 }
 function onlineHTML() {
-  return ui`<h1>ONLINE</h1><h2>Free for all · Target: ${FFA_TARGET} kills · Up to 25 players</h2>
+  return ui`<h1>ONLINE</h1><h2>Free for all · Target: ${matchTarget()} kills · Up to 25 players</h2>
     <div class="online" id="online">
       <div class="row"><span>Your name</span><input type="text" class="namebox" id="setName" maxlength="14" value="${esc(myName)}"></div>
       <div class="row"><button type="button" class="big" id="quickBtn">Quick play</button><span class="hint">Join an open room, or create one if none are available.</span></div>
@@ -874,7 +886,7 @@ function onlineHTML() {
 function lobbyHTML() {
   const rows = lobbyRows(); const host = net.isHost; const n = rows.length;
   const startButton = host ? `<button type="button" class="big" id="startBtn">${ui('Start match')}</button>` : `<span class="hint" id="hostWait">${ui('Waiting for the host to start')}</span>`;
-  return ui`<h1>Lobby</h1><h2>Free for all · Target: ${FFA_TARGET} kills · ${n}/${net.maxPlayers} players</h2>
+  return ui`<h1>Lobby</h1><h2>Free for all · Target: ${matchTarget()} kills · ${n}/${net.maxPlayers} players</h2>
     <div class="online" id="online">
       <div class="row"><span>Code</span><span class="code">${String(net.isHost ? (net.aliasCode || net.code) : (lobby.shown || net.code) || '').replace(/-\d+$/, '')}</span></div>
       ${mapHTML(lobby.map || mapKey, host)}
@@ -938,7 +950,7 @@ function showPause() {
   hud.showScreen(ui`<h1>Paused</h1><h2>${mapName(level.key)} · Wave ${game.wave} · Score ${game.score}</h2>${CONTROLS_HTML}${settingsHTML()}${menuBtnHTML()}<div class="go">Click to resume or press ${hud.key('confirm')} </div>`);
   wireSettings(); wireMenuBtn();
 }
-function showClickToPlay() { hud.showScreen(ui`<h1>Match ready</h1><h2>Free for all · Target: ${FFA_TARGET} kills</h2><div class="go">Click to start or press ${hud.key('confirm')} .</div>`); }
+function showClickToPlay() { hud.showScreen(ui`<h1>Match ready</h1><h2>Free for all · Target: ${matchTarget()} kills</h2><div class="go">Click to start or press ${hud.key('confirm')} .</div>`); }
 function showDead() {
   hud.setGameplayVisible(false); const nb = game.score > best; if (nb) { best = game.score; localStorage.setItem('doodle_best', String(best)); }
   hud.showScreen(ui`<h1>Out of ink</h1><div class="stats"><b>${game.wave}</b> wave · <b>${game.kills}</b> kills · Score <b>${game.score}</b>${nb ? ui(" · <b>New record</b>") : ui` · Best score ${best}`}</div>${checkpointHTML()}${menuBtnHTML()}<div class="go">Click to play again or press ${hud.key('confirm')} </div>`);
@@ -969,17 +981,17 @@ function hostStart() {
   const spawns = {}; [...lobby.players.keys()].forEach((id, i) => { spawns[id] = order[i % order.length]; });
   hostMines.clear();approvedGrenades.clear();startMatch(false, spawns[net.id]); combat.clear(lobby.katana);
   for (const id of lobby.players.keys()) applyVitals(combat.add(id, spawnSpots()[spawns[id]].toArray()));
-  net.send('start', { spawns, map: lobby.map || mapKey, katana: lobby.katana, vitals: [...combat.players.values()].map(p => combat.view(p, true)) }); sendScores();
+  net.send('start', { spawns, map: lobby.map || mapKey, katana: lobby.katana, killTarget: game.killTarget, vitals: [...combat.players.values()].map(p => combat.view(p, true)) }); sendScores();
 }
 function startMatch(late, spawnIdx) {
-  pendingHits.clear(); deathEvents.clear(); game.katanaAllowed = lobby.katana !== false;
+  pendingHits.clear(); deathEvents.clear(); game.killTarget = normalizeKillTarget(lobby.killTarget); game.katanaAllowed = lobby.katana !== false;
   net.inMatch = true; game.mode = 'ffa'; setArena(true); resetGame(); matchLeft = FFA_TIME; clockT = 0; game.clockStarted = false;
   // nobody sends snapshots in the lobby, so the silence clock restarts here or the sweep would drop everyone
   for (const r of remote.values()) r.lastSeen = performance.now();
   if (!scores.size) for (const [id, p] of lobby.players) scores.set(id, { name: p.name, kills: 0, deaths: 0 });
   const spots = spawnSpots(); player.reset(spawnIdx != null && spots[spawnIdx] ? spots[spawnIdx].clone() : arenaSpawn()); beginCommon(); game.state = 'play'; screen = 'lobby'; player.shieldT = 2;
   if (late) net.broadcast('mine-sync', { map: level.key });
-  refreshScoreHud(); hud.message(ui("Free for all"), late ? ui("Joined a match in progress") : ui("Target: ") + FFA_TARGET + ui(" kills · ") + Math.round(FFA_TIME / 60) + ui(" minutes · Everyone is a rival"), 3);
+  refreshScoreHud(); hud.message(ui("Free for all"), late ? ui("Joined a match in progress") : ui("Target: ") + matchTarget() + ui(" kills · ") + Math.round(FFA_TIME / 60) + ui(" minutes · Everyone is a rival"), 3);
   hud.tip(ui`Scoreboard: <b>${hud.key('score')}</b> hold.`, 5);
   // a match started by someone else's click cannot grab the mouse: ask for a click
   setTimeout(() => { if (game.state === 'play' && !input.pointerLocked && !input.usingGamepad) { game.menu = true; showClickToPlay(); } }, 250);
