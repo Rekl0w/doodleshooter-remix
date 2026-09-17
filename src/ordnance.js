@@ -64,7 +64,7 @@ export class Ordnance {
     const key = `${from}:${d.id}`, pos = new THREE.Vector3(...d.pos);
     if(from===this.ctx.localPeerId?.()){const i=this.mines.findIndex(m=>m.id===d.id);if(d.op==='place')return;if(i>=0){remove(this.ctx.scene,this.mines[i].mesh);this.mines.splice(i,1);}}
     if (d.op === 'place') {
-      if (this.remoteMines.has(key) || this.seen.has(key) || this.remoteMines.size >= 40) return;
+      if (this.remoteMines.has(key) || this.seen.has(key) || this.remoteMines.size >= 100) return;
       const mesh = mineModel(); mesh.position.copy(pos); this.ctx.scene.add(mesh); this.remoteMines.set(key, { mesh, from, life: 90 });
     } else {
       const mine = this.remoteMines.get(key); if (mine) { remove(this.ctx.scene, mine.mesh); this.remoteMines.delete(key); }

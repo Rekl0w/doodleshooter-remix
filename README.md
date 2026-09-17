@@ -82,7 +82,7 @@ Dust II is based on **Counter-Strike / Valve** references: [Valve's Dust II pres
 
 After the map is selected, each player can choose their own visual style below the map cards.
 
-Up to **10 players**, with a target of **20 kills**. Joining a match already in progress is supported. Use **Quick play** to find public rooms.
+Up to **25 players**, with a target of **20 kills**. Joining a match already in progress is supported. Use **Quick play** to find public rooms.
 
 PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v11` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
 

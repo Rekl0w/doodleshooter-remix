@@ -854,11 +854,11 @@ function mainHTML() {
       <p>Original game: <strong>DoodleShooter · iifor</strong><br>A community remix of DoodleShooter. Thanks to the original creator and contributors!</p>
       <nav aria-label="Original game links"><a href="https://doodleshooter.vercel.app/" target="_blank" rel="noopener noreferrer">Play the original ↗</a><a href="https://github.com/iifor/doodleshooter" target="_blank" rel="noopener noreferrer">iifor / GitHub source ↗</a></nav>
     </section>
-    <div class="mainbtns"><button type="button" class="start" id="soloBtn">PLAY<i>Solo · Survive the waves</i></button><button type="button" id="onlineBtn">ONLINE<i>Free for all · Up to 10 players</i></button></div>
+    <div class="mainbtns"><button type="button" class="start" id="soloBtn">PLAY<i>Solo · Survive the waves</i></button><button type="button" id="onlineBtn">ONLINE<i>Free for all · Up to 25 players</i></button></div>
     ${mapHTML(mapKey, true) + `<button type="button" class="play-map" id="playMapBtn">${ui('Play selected map')}</button>`}${CONTROLS_HTML}${settingsHTML()}${checkpointHTML()}${best ? ui`<div class="beststat">Best score：${best}</div>` : ''}`;
 }
 function onlineHTML() {
-  return ui`<h1>ONLINE</h1><h2>Free for all · Target: ${FFA_TARGET} kills · Up to 10 players</h2>
+  return ui`<h1>ONLINE</h1><h2>Free for all · Target: ${FFA_TARGET} kills · Up to 25 players</h2>
     <div class="online" id="online">
       <div class="row"><span>Your name</span><input type="text" class="namebox" id="setName" maxlength="14" value="${esc(myName)}"></div>
       <div class="row"><button type="button" class="big" id="quickBtn">Quick play</button><span class="hint">Join an open room, or create one if none are available.</span></div>
