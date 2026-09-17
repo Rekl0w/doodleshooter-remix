@@ -264,7 +264,7 @@ try {
     const g = __game,
       t = g.remote.get(id);
     g.player.switchTo(2);
-    return g.player.weapon.fireRay(g.player.eye, t.center.clone().sub(g.player.eye).normalize());
+    return g.player.weapon.fireRay(g.player.eye, g.player.forward.copy(t.center.clone().sub(g.player.eye).normalize()));
   }, guestId));
   await host.waitForFunction(id => __game.combat.players.get(id).hp === 0, guestId);
   await rival.waitForFunction(id => !__game.remote.get(id).alive, guestId);

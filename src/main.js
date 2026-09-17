@@ -1,10 +1,12 @@
+import { TeamMatch, TEAMS, teamTarget } from './team-match.js';
+import { TEAM_BLOCKS } from './team-maps.js';
 import { ui, language, selectLanguage } from './i18n.js';
 import { appearanceFor, saveAppearance } from './appearance.js';
 // Game bootstrap: solo waves, free-for-all lobbies, checkpoints, scoring, screens and the loop.
 // Online play is peer-to-peer: one player's browser hosts the lobby and keeps score, every
 // player runs their own body. The host validates combat and owns health and respawns.
 import * as THREE from 'three';
-import { InkRenderer, INK, makeInkMaterial } from './render.js';
+import { InkRenderer, INK, makeInkMaterial, setInk } from './render.js';
 import { World } from './physics.js';
 import { Input } from './input.js';
 import { buildLevel, LEVELS } from './level.js';
@@ -86,10 +88,17 @@ player.name = myName;
 const net = new Net();
 const nameplates = new Nameplates(hud.root);
 const remote = new Map();      // peer id -> RemotePlayer
-const lobby = { killTarget: DEFAULT_KILL_TARGET, katana: true, players: new Map(), hostId: null, isPublic: true, status: '', code: '', map: null };
+const lobby = { matchMode: 'ffa', roundTarget: 16, killTarget: DEFAULT_KILL_TARGET, katana: true, players: new Map(), hostId: null, isPublic: true, status: '', code: '', map: null };
 const validKillTarget = n => Number.isInteger(n) && n >= 1 && n <= 999;
 const normalizeKillTarget = n => validKillTarget(n) ? n : DEFAULT_KILL_TARGET;
 const matchTarget = () => online() && ['play', 'dying', 'over'].includes(game.state) ? normalizeKillTarget(game.killTarget) : normalizeKillTarget(lobby.killTarget);
+const teamMode = () => online() && ['teams','tdm'].includes(game.matchMode);
+const roundMode = () => online() && game.matchMode === 'teams';
+const teamOf = id => lobby.players.get(id)?.team;
+const friendly = (a,b) => teamMode() && a !== b && TEAMS.includes(teamOf(a)) && teamOf(a) === teamOf(b);
+const roundLive = () => !roundMode() || game.round?.phase === 'live';
+const teamMaps = ['dust2', 'foundry', 'quarter'];
+let teamMatch = null, teamSyncT = 0;
 const scores = new Map();      // peer id -> { name, kills, deaths }
 let screen = 'main';           // which start-screen panel is showing: main | online | lobby
 window.__game = { ctx, game, player, enemies, nav, world, level, hud, effects, input, net, remote, lobby, scores };
@@ -97,11 +106,13 @@ window.__game = { ctx, game, player, enemies, nav, world, level, hud, effects, i
 const deathEvents = new Set(), hostMines = new Map(), approvedGrenades = new Map();
 let combatSyncT = 0;
 const combat = new HostCombat({
+ enabled: roundLive, friendly, regenerate: () => !roundMode(),
  sight: (a,b) => world.hasLineOfSight(new THREE.Vector3(...a), new THREE.Vector3(...b), box => box.data.noShoot === true),
  changed: v => publishVitals(v),
  died: d => { net.send('combat-death', d); combatDeath(d); tallyDeath(d.victim, d.killer); }
 });
 window.__game.combat = combat;
+ctx.controlsFrozen = () => roundMode() && !roundLive();
 ctx.authorityActive = () => net.active && online();
 function applyVitals(v) {
  if (!online() || !inMatch() || !v || !Number.isFinite(v.hp) || !Number.isFinite(v.life)) return;
@@ -112,6 +123,7 @@ function applyVitals(v) {
  if ((v.life !== player.lifeId || v.spawn) && v.hp > 0) {
   const wasDead = !player.alive || game.state === 'dying';
   player.reset(new THREE.Vector3(...v.pos), { preserveWorld: true }); player.lifeId=v.life; player.name=myName;
+  if(level.key==='skyline'&&v.pos[1]>10){player.yaw=Math.atan2(v.pos[0],v.pos[2]);player.pitch=-.12;}
   if(wasDead && !game.over) { game.state='play';game.menu=false;game.respawnRequestAt=0;hud.hideScreen();hud.setGameplayVisible(true);hud.setRespawn();hud.clearMessage();hud.tip(ui('Spawn protection · 2 s'),1.6); }
  }
  player.maxHp=110; player.shieldT=v.protection;
@@ -132,8 +144,8 @@ net.on('combat-hit',(d,from)=>{
  if(from===net.id)acceptHitResult(result);else net.sendTo(from,'combat-result',result);
 });
 net.on('combat-respawn',(d,from)=>{
- if(!net.isHost||!inMatch()||game.over)return;const p=combat.players.get(from);if(!p||d?.life!==p.life)return;
- const v=combat.respawn(from,arenaSpawn().toArray());if(v){clearHostMines(from);publishVitals(v);}else publishVitals(combat.view(p));
+ if(!net.isHost||!inMatch()||game.over||roundMode())return;const p=combat.players.get(from);if(!p||d?.life!==p.life)return;
+ const v=combat.respawn(from,arenaSpawn(from).toArray());if(v){clearHostMines(from);publishVitals(v);}else publishVitals(combat.view(p));
 });
 function combatDeath(d) {
  const key=d.victim+':'+d.life;if(deathEvents.has(key))return;deathEvents.add(key);if(deathEvents.size>512)deathEvents.delete(deathEvents.values().next().value);
@@ -146,15 +158,16 @@ function combatDeath(d) {
 }
 net.on('combat-death',(d,from)=>{if(from===net.hostId)combatDeath(d);});
 net.on('combat-cut',(d,from)=>{
- if(!net.isHost||!inMatch()||game.over||!combat.katana||!vector(d?.point))return;
+ if(!net.isHost||!inMatch()||game.over||!roundLive()||!combat.katana||!vector(d?.point))return;
  const a=combat.players.get(from),b=combat.players.get(d.target);
- if(!a||!b||a.hp<=0||b.hp<=0||a.life!==d.life||a.snap?.[5]!==3||!(b.snap?.[6]&128))return;
+ if(!a||!b||a.hp<=0||b.hp<=0||a.life!==d.life||a.snap?.[5]!==3||friendly(from,d.target)||!(b.snap?.[6]&128))return;
  const eye=new THREE.Vector3(...a.pos).add(new THREE.Vector3(0,1.6,0)),point=new THREE.Vector3(...d.point);
  const rope=new THREE.Line3(new THREE.Vector3(...b.pos).add(new THREE.Vector3(0,1.25,0)),new THREE.Vector3(...b.snap.slice(11,14)));
  if(eye.distanceTo(point)>4.4||rope.closestPointToPoint(point,true,new THREE.Vector3()).distanceTo(point)>1||!combat.sight(eye.toArray(),d.point)||!combat.allow(a,'cut',.36,1))return;
  if(d.target===net.id)net._emit('cut',{},net.id);else net.sendTo(d.target,'cut',{});
 });
 function allowGrenade(d,from) {
+ if(!roundLive())return false;
  const p=combat.players.get(from);if(!p||p.hp<=0||!vector(d?.pos)||!vector(d?.vel)||typeof d.id!=='string'||d.id.length>100||p.grenades<=0)return false;
  if(new THREE.Vector3(...d.pos).distanceTo(new THREE.Vector3(...p.pos))>5||!combat.sight([p.pos[0],p.pos[1]+1.6,p.pos[2]],d.pos)||Math.hypot(...d.vel)>40+Math.hypot(...(p.snap?.slice(8,11)||[0,0,0]))*.5||!combat.allow(p,'grenade',.55,1))return false;
  const key=from+':'+d.id;if(approvedGrenades.has(key))return false;approvedGrenades.set(key,{owner:from,id:d.id});p.grenades--;return true;
@@ -164,6 +177,7 @@ ctx.authorityExplosion=(n,c)=>{
  if(!entry)return;approvedGrenades.delete(key);combat.blast(owner,entry.id,c.toArray(),'grenade');ctx.blastBreakables?.(c,8.5);
 };
 function allowMine(d,from) {
+ if(!roundLive())return false;
  const p=combat.players.get(from),key=from+':'+d?.id;
  if(!p||typeof d?.id!=='string'||d.id.length>100||!vector(d.pos)||d.map!==level.key)return false;
  if(d.op==='remove'){hostMines.delete(key);return true;}
@@ -181,14 +195,15 @@ function tickHostMines() {
  const now=performance.now()/1000;
  for(const [key,m]of hostMines){
   if(now-m.at>90){removeHostMine(key,m);continue;}if(now-m.at<1)continue;
-  const target=[...combat.players.values()].some(p=>p.id!==m.owner&&p.hp>0&&Math.hypot(p.pos[0]-m.pos[0],p.pos[1]+1-m.pos[1],p.pos[2]-m.pos[2])<3.2&&combat.sight(m.pos,[p.pos[0],p.pos[1]+1,p.pos[2]]));
+  const target=[...combat.players.values()].some(p=>p.id!==m.owner&&!friendly(m.owner,p.id)&&p.hp>0&&Math.hypot(p.pos[0]-m.pos[0],p.pos[1]+1-m.pos[1],p.pos[2]-m.pos[2])<3.2&&combat.sight(m.pos,[p.pos[0],p.pos[1]+1,p.pos[2]]));
   if(target)removeHostMine(key,m,true);
  }
 }
 net.onIngress=(msg,from)=>{
  const d=msg.d,p=combat.players.get(from);
- if(!['ps','nade','ordnance','shots','brk','mine-sync','take','scene-ping','combat-hit','combat-respawn','combat-fall','combat-cut'].includes(msg.t))return null;
- if(['mine-sync','take','scene-ping'].includes(msg.t))return {...msg,relay:false,to:undefined};
+ if(!roundLive() && !['ps','scene-ping','mine-sync','team-select'].includes(msg.t))return null;
+ if(!['team-select','ps','nade','ordnance','shots','brk','mine-sync','take','scene-ping','combat-hit','combat-respawn','combat-fall','combat-cut'].includes(msg.t))return null;
+ if(['team-select','mine-sync','take','scene-ping'].includes(msg.t))return {...msg,relay:false,to:undefined};
  if(msg.t==='ps') {
   if(!inMatch())return null;const snap=combat.snapshot(from,d);
   if(!snap){if(p)net.sendTo(from,'combat-state',{...combat.view(p),correction:true});return null;}
@@ -207,14 +222,14 @@ ctx.localPeerId=()=>net.id;
 
 ctx.reportFall = pos => {if(performance.now()-(game.fallRequestAt||0)<800)return;game.fallRequestAt=performance.now();combatRequest('combat-fall',{pos,life:player.lifeId});};
 net.on('combat-fall',(d,from)=>{
- if(!net.isHost||!inMatch()||game.over||!vector(d?.pos))return;
+ if(!net.isHost||!inMatch()||game.over||!roundLive()||!vector(d?.pos))return;
  const p=combat.players.get(from),B=level.bounds;if(!p||p.hp<=0||p.life!==d.life||!combat.allow(p,'fall',1,1))return;
  if(d.pos[1]>=-12&&d.pos[0]>=B.minX-10&&d.pos[0]<=B.maxX+10&&d.pos[2]>=B.minZ-10&&d.pos[2]<=B.maxZ+10)return;
  combat.damage(p,20,null,{src:'fall'});p.pos=level.playerStart.toArray();p.history=[];publishVitals({...combat.view(p),correction:true});
  const sc=scores.get(from);if(sc){sc.kills=Math.max(0,sc.kills-1);sendScores();net.send('feed',{event:'fell',name:sc.name});}
 });
 function hostPickup(d,from) {
- if(!net.isHost||!inMatch()||game.over)return;
+ if(!net.isHost||!inMatch()||game.over||!roundLive())return;
  const p=pickups.find(x=>x.id===d?.id),v=combat.players.get(from);if(!p||!v||v.hp<=0)return;
  const center=new THREE.Vector3(...v.pos);center.y+=1;
  if(center.distanceTo(p.mesh.position)>3.6||!world.hasLineOfSight(center,p.mesh.position))return;
@@ -224,11 +239,12 @@ function hostPickup(d,from) {
 function moderationHTML() {
  const waiting=game.state==='lobby';
  const rule=waiting&&net.isHost?`<label><input type="checkbox" id="katanaRule" ${lobby.katana?'checked':''}> ${ui('Allow katana')}</label>`:`<strong>${(waiting?lobby.katana:game.katanaAllowed)?ui('Katana enabled'):ui('Katana disabled')}</strong>`;
- const target=waiting&&net.isHost?`<label class="kill-target" for="killTarget">${ui('Kill target')}<input type="number" id="killTarget" min="1" max="999" step="1" required value="${normalizeKillTarget(lobby.killTarget)}"><small>1–999</small></label>`:'';
+ const target=waiting&&net.isHost&&lobby.matchMode!=='teams'?`<label class="kill-target" for="killTarget">${lobby.matchMode==='tdm'?ui('Team kill target'):ui('Kill target')}<input type="number" id="killTarget" min="1" max="999" step="1" required value="${normalizeKillTarget(lobby.killTarget)}"><small>1–999</small></label>`:'';
  const players=net.isHost?lobbyRows().filter(p=>p.id!==net.id).map(p=>`<div class="moderation-row"><span>${esc(p.name)}</span><button type="button" data-kick="${esc(p.id)}" aria-label="${esc(ui('Kick')+' '+p.name)}">${ui('Kick')}</button></div>`).join(''):'';
- return `<div class="moderation" id="moderation">${rule}${target}${players?`<h3>${ui('Manage players')}</h3>${players}`:''}</div>`;
+ return `<div class="moderation" id="moderation">${modeRulesHTML(waiting)}${rule}${target}${players?`<h3>${ui('Manage players')}</h3>${players}`:''}</div>`;
 }
 function wireModeration() {
+ wireTeamRules();
  const box=hud.el.panel.querySelector('#moderation');if(!box)return;
  box.addEventListener('click',e=>{e.stopPropagation();const b=e.target.closest('[data-kick]');if(b&&net.isHost){net.kick(b.dataset.kick);if(game.menu)showPause();}});
  box.addEventListener('keydown',e=>e.stopPropagation());
@@ -238,14 +254,133 @@ function wireModeration() {
   if(!validKillTarget(value)){e.target.reportValidity();e.target.value=normalizeKillTarget(lobby.killTarget);return;}
   lobby.killTarget=value;broadcastLobby(false);
   // Keep the focused control intact so clicking Start after typing works once.
-  hud.el.panel.querySelector('h2').textContent=ui`Free for all · Target: ${value} kills · ${lobby.players.size}/${net.maxPlayers} players`;
+  hud.el.panel.querySelector('h2').textContent=lobby.matchMode==='tdm'?teamHeading():ui`Free for all · Target: ${value} kills · ${lobby.players.size}/${net.maxPlayers} players`;
  });
  box.querySelector('#katanaRule')?.addEventListener('change',e=>{if(net.isHost&&game.state==='lobby'){lobby.katana=e.target.checked;broadcastLobby();}});
 }
 
+
+// ---------------- team elimination ----------------
+function tdmTimeWinner(){const s=game.teamScores,team=s.red===s.blue?'draw':s.red>s.blue?'red':'blue';return {id:'team-'+team,team,name:teamName(team)};}
+function teamName(t) { return t==='red'?ui('Red team'):t==='blue'?ui('Blue team'):ui('Draw'); }
+function balancedTeam() { return [...lobby.players.values()].filter(p=>p.team==='red').length <= [...lobby.players.values()].filter(p=>p.team==='blue').length ? 'red':'blue'; }
+function syncTeamColors() {
+ const enabled = game.state==='lobby' ? lobby.matchMode!=='ffa' : teamMode();
+ for(const [id,r]of remote){r.team=enabled?teamOf(id):null;r.ink=r.team==='red'?INK.TEAM_RED:r.team==='blue'?INK.TEAM_BLUE:INK.RED;setInk(r.mat,r.ink);}
+ player.team=enabled?teamOf(net.id):null;
+}
+function assignTeam(id,team) {
+ if(!net.isHost||game.state!=='lobby'||lobby.matchMode==='ffa'||!TEAMS.includes(team)||!lobby.players.has(id))return;
+ if([...lobby.players].filter(([pid,p])=>pid!==id&&p.team===team).length>=13){lobby.status=ui('A team can have at most 13 players');broadcastLobby();return;}
+ lobby.players.get(id).team=team;lobby.status='';syncTeamColors();broadcastLobby();
+}
+net.on('team-select',(d,from)=>assignTeam(from,d?.team));
+function modeRulesHTML(waiting) {
+ if(!waiting)return '';
+ return `<label class="mode-rule">${ui('Game mode')}${net.isHost?`<select id="matchMode"><option value="ffa" ${lobby.matchMode==='ffa'?'selected':''}>${ui('Free for all')}</option><option value="teams" ${lobby.matchMode==='teams'?'selected':''}>${ui('Team elimination')}</option><option value="tdm" ${lobby.matchMode==='tdm'?'selected':''}>${ui('Team Deathmatch')}</option></select>`:`<strong>${lobby.matchMode==='teams'?ui('Team elimination'):lobby.matchMode==='tdm'?ui('Team Deathmatch'):ui('Free for all')}</strong>`}</label>`+
+ (lobby.matchMode==='teams'?`<div class="hint">${ui('Eliminate the other team. No respawns until the next round. Friendly fire is off.')}<br>${ui('2 minutes per round · At timeout: survivors, then health · Equal teams draw')}</div>${net.isHost?`<label class="kill-target">${ui('Rounds to win')}<input id="roundTarget" type="number" min="1" max="99" step="1" value="${teamTarget(lobby.roundTarget)}"><small>1–99</small></label>`:''}`:'');
+}
+function wireTeamRules() {
+ const panel=hud.el.panel;
+ panel.querySelector('#matchMode')?.addEventListener('change',e=>{
+  if(!net.isHost||game.state!=='lobby')return;lobby.matchMode=['teams','tdm'].includes(e.target.value)?e.target.value:'ffa';lobby.status='';
+  if(lobby.matchMode!=='ffa'){let i=0;for(const p of lobby.players.values())p.team=TEAMS[i++%2];if(lobby.matchMode==='teams'&&!teamMaps.includes(lobby.map))lobby.map='dust2';}
+  syncTeamColors();broadcastLobby();
+ });
+ panel.querySelector('#roundTarget')?.addEventListener('change',e=>{
+  if(!net.isHost||game.state!=='lobby')return;const n=e.target.valueAsNumber;
+  if(!Number.isInteger(n)||n<1||n>99){e.target.value=teamTarget(lobby.roundTarget);return;}
+  lobby.roundTarget=n;broadcastLobby(false);panel.querySelector('h2').textContent=teamHeading();
+ });
+ for(const select of panel.querySelectorAll('[data-team-player]')){
+  select.addEventListener('click',e=>e.stopPropagation());select.addEventListener('keydown',e=>e.stopPropagation());
+  select.addEventListener('change',e=>{e.stopPropagation();if(net.isHost)assignTeam(select.dataset.teamPlayer,select.value);else if(select.dataset.teamPlayer===net.id)net.send('team-select',{team:select.value});});
+ }
+}
+function teamHeading(){return `${lobby.matchMode==='teams'?ui('Team elimination'):ui('Team Deathmatch')} · ${lobby.matchMode==='teams'?ui('Rounds to win')+': '+teamTarget(lobby.roundTarget):ui('Team kill target')+': '+normalizeKillTarget(lobby.killTarget)} · ${lobby.players.size}/${net.maxPlayers}`;}
+function teamLobbyHTML(){
+ const host=net.isHost;
+ const teams=TEAMS.map(team=>`<section class="team-roster" data-team="${team}"><h3>${teamName(team)} · ${lobbyRows().filter(p=>p.team===team).length}/13</h3>${lobbyRows().filter(p=>p.team===team).map(p=>`<div><span>${esc(p.name)}${p.id===net.id?ui(' (you)'):''}${p.id===lobby.hostId?' ♛':''}</span>${host||p.id===net.id?`<select data-team-player="${esc(p.id)}" aria-label="${esc(ui('Team')+' · '+p.name)}">${TEAMS.map(t=>`<option value="${t}" ${p.team===t?'selected':''}>${teamName(t)}</option>`).join('')}</select>`:''}</div>`).join('')}</section>`).join('');
+ return `<h1>${ui('Lobby')}</h1><h2>${teamHeading()}</h2><div class="online" id="online"><div class="row"><span>${ui('Code')}</span><span class="code">${esc(String(net.isHost?(net.aliasCode||net.code):(lobby.shown||net.code)).replace(/-\d+$/,''))}</span></div><div class="team-rosters">${teams}</div>${moderationHTML()}${mapHTML(lobby.map,host)}<div class="hint">${lobby.matchMode==='teams'?ui('Teams are locked during the match. Late arrivals wait for the next round.'):ui('Respawn after each death. Every kill counts for your team. Friendly fire is off.')}</div><div class="row">${host?`<button type="button" class="big" id="startBtn">${ui('Start match')}</button>`:`<span id="hostWait">${ui('Waiting for the host to start')}</span>`}<button type="button" class="alt" id="leaveBtn">${ui('Leave')}</button></div><div class="status" id="status">${esc(lobby.status)}</div></div>`;
+}
+function teamBoardHTML(){
+ const state=game.round;if(game.matchMode==='tdm')return `<h3>${ui('Team Deathmatch')}</h3>`+TEAMS.map(team=>`<h4 data-team="${team}">${teamName(team)} · ${game.teamScores?.[team]||0}</h4>`+sortedScores().filter(([id])=>teamOf(id)===team).map(([id,p])=>`<div><span>${esc(p.name)}</span><span>${p.kills} / ${p.deaths}</span></div>`).join('')).join('')+`<div class="foot">${ui('Team kill target')}: ${matchTarget()} · ${mmss(matchLeft)}</div>`;
+ return `<h3>${ui('Team elimination')} · ${ui('Round')} ${state?.round||1}</h3>`+TEAMS.map(team=>`<h4 data-team="${team}">${teamName(team)} · ${state?.scores[team]||0}</h4>`+sortedScores().filter(([id])=>teamOf(id)===team).map(([id,p])=>`<div class="${id===net.id?'me':''}"><span>${esc(p.name)}</span><span>${p.kills} / ${p.deaths}</span></div>`).join('')).join('')+`<div class="foot">${ui('Rounds to win')}: ${state?.target||16} · ${ui('Kills / deaths')}</div>`;
+}
+function renderTeamHud(){
+ if(game.matchMode==='tdm'){hud.setPvpScore(`<div class="team-score"><b data-team="red">${teamName('red')}<strong>${game.teamScores?.red||0}</strong></b><span>${ui('Team Deathmatch')}</span><b data-team="blue">${teamName('blue')}<strong>${game.teamScores?.blue||0}</strong></b></div><div class="target">${ui('Team kill target')}: ${matchTarget()} · ${teamName(teamOf(net.id))}</div>`);hud.setModifier('');return;}
+ const s=game.round;if(!s)return;
+ const status=s.phase==='freeze'?ui('Get ready'):s.phase==='intermission'?(s.result==='draw'?ui('Draw'):teamName(s.result)+ui(' wins')):ui('Round');
+ hud.setPvpScore(`<div class="team-score"><b data-team="red">${teamName('red')}<strong>${s.scores.red}</strong></b><span>${ui('Round')} ${s.round}</span><b data-team="blue">${teamName('blue')}<strong>${s.scores.blue}</strong></b></div><div class="target">${ui('Rounds to win')}: ${s.target} · ${teamName(teamOf(net.id))}</div>`);
+ hud.setTimer(`${status} · ${mmss(s.left)}`);
+ hud.setModifier(player.alive?'':ui('Eliminated · Wait for the next round'));
+}
+function teamSpawnPositions(){
+ // Dedicated map spawns are checked against collision so no player starts in props.
+ const sets=level.teamSpawns.map(points=>points.filter(pos=>!world.overlapsBody({pos,halfW:.36,height:1.8})));
+ if(sets.some(points=>points.length<13))throw new Error('Team map has fewer than 13 clear spawns per side: '+level.key);
+ const counts=[0,0],out={};for(const [id,p]of lobby.players){const side=(p.team==='red'?0:1)^(teamMatch.view().swapped?1:0);out[id]=sets[side][counts[side]++].toArray();}return out;
+}
+function hostStartTeams(){
+ if(!TEAMS.every(t=>[...lobby.players.values()].some(p=>p.team===t))){lobby.status=ui('Both teams need at least one player');renderLobby();return;}
+ if(!teamMaps.includes(lobby.map))lobby.map='dust2';
+ scores.clear();for(const[id,p]of lobby.players)scores.set(id,{name:p.name,kills:0,deaths:0});
+ teamMatch=new TeamMatch({target:lobby.roundTarget});window.__game.teamMatch=teamMatch;teamMatch.startRound();hostTeamRound();sendScores();
+}
+function hostTeamRound(){
+ setArena(true);const positions=teamSpawnPositions();
+ hostMines.clear();approvedGrenades.clear();combat.clear(lobby.katana);
+ for(const[id,pos]of Object.entries(positions))combat.add(id,pos);
+ const d={state:teamMatch.view(),players:lobbyRows(),map:lobby.map,katana:lobby.katana,vitals:[...combat.players.values()].map(p=>combat.view(p,true))};
+ applyTeamRound(d);net.send('team-round',d);teamSyncT=0;
+}
+function applyTeamRound(d){
+ lobby.matchMode='teams';lobby.roundTarget=teamTarget(d.state.target);lobby.map=knownMap(d.map);lobby.katana=d.katana!==false;
+ if(d.players){lobby.players.clear();for(const p of d.players){lobby.players.set(p.id,{name:p.name,team:p.team});if(p.id!==net.id)addRemote(p.id,p.name);}}
+ game.mode='ffa';game.matchMode='teams';game.round=d.state;game.katanaAllowed=lobby.katana;net.inMatch=true;
+ setArena(true);resetGame();pendingHits.clear();deathEvents.clear();shotQueue.length=0;
+ game.state='play';game.menu=false;game.over=null;screen='lobby';hud.tip('',0);hud.clearMessage();hud.el.killfeed.innerHTML='';
+ for(const r of remote.values()){r.lastSeen=performance.now();r.snapA=null;r.snapB=null;if(r.root)r.root.visible=false;}
+ for(const v of d.vitals)applyVitals(v);
+ const own=d.vitals.find(v=>v.id===net.id);
+ if(own){player.yaw=own.pos[2]>0?0:Math.PI;player.pitch=0;}
+ for(const id of d.broken||[]){const b=level.breakables[id];if(b)breakProp(b,null,false,true);}
+ syncTeamColors();input.suppressUntilRelease(['fire','grenade','jump','confirm']);beginCommon();renderTeamHud();
+ hud.message(ui('Round')+' '+d.state.round,teamName(teamOf(net.id))+' · '+(d.late?ui('Joined a match in progress'):ui('Get ready')),3);
+ if(d.late)net.broadcast('mine-sync',{map:level.key});
+ setTimeout(()=>{if(inMatch()&&!game.over&&!input.pointerLocked&&!input.usingGamepad){game.menu=true;showClickToPlay();}},250);
+}
+net.on('team-round',(d,from)=>{if(!net.isHost&&from===net.hostId)applyTeamRound(d);});
+net.on('team-state',(d,from)=>{if(!net.isHost&&from===net.hostId&&game.matchMode==='tdm'&&d.mode==='tdm'){game.teamScores=d.scores;refreshScoreHud();return;}if(!net.isHost&&from===net.hostId&&roundMode()&&d.round===game.round?.round){game.round=d;renderTeamHud();}});
+function addLateTeammate(id,name){
+ combat.add(id,level.teamSpawns[0][0].toArray());const p=combat.players.get(id);p.hp=0;p.deadAt=performance.now()/1000;p.protectedUntil=0;
+ scores.set(id,{name,kills:0,deaths:0});
+ net.sendTo(id,'team-round',{state:teamMatch.view(),players:lobbyRows(),map:lobby.map,katana:lobby.katana,late:true,vitals:combat.views(),broken:level.breakables.filter(b=>!b.alive).map(b=>b.id)});
+ publishVitals(combat.view(p));sendScores();syncTeamColors();
+}
+function updateTeamMatch(dt){
+ if(!inMatch()||game.over)return;
+ if(net.isHost&&teamMatch){
+  const round=teamMatch.round,phase=teamMatch.phase;teamMatch.tick(lobby.players,combat.players);
+  if(teamMatch.round!==round){hostTeamRound();return;}
+  game.round=teamMatch.view();
+  if(phase==='freeze'&&teamMatch.phase==='live')for(const p of combat.players.values())p.protectedUntil=0;
+  teamSyncT-=dt;if(teamSyncT<=0||phase!==teamMatch.phase){net.send('team-state',game.round);teamSyncT=.25;}
+  if(teamMatch.phase==='over'){const winner={id:'team-'+teamMatch.winner,team:teamMatch.winner,name:teamName(teamMatch.winner)};net.send('end',winner);endMatch(winner);return;}
+ }
+ renderTeamHud();
+}
+function spectateTeammate(){
+ if(!roundMode()||player.alive||game.over||!inMatch())return;
+ const teammate=[...remote.values()].find(r=>r.team===teamOf(net.id)&&r.alive&&r.snapB&&!r.away);
+ player.rig.visible=false;hud.setScope(false);
+ if(teammate){const c=ctx.camera;c.position.copy(teammate.eye);c.lookAt(teammate.eye.clone().add(teammate.forward));c.updateMatrixWorld();}
+ // Never offer a free camera or an enemy's viewpoint to eliminated players.
+}
+
 // anything a bullet or a blade can hit besides enemies
 ctx.targets = () => [player, ...remote.values()];
-ctx.canHurt = (t) => online() && t !== player;
+ctx.canHurt = (t) => online() && roundLive() && t !== player && !friendly(net.id,t.id);
 ctx.raycastPlayers = (o, d, maxDist) => {
   let best = null;
   for (const t of remote.values()) {
@@ -303,7 +438,7 @@ ctx.hitPlayer = (t, dmg, info) => {
   const frontHit = /^(head|torso|arm|fore)/.test(info.part || '');
   // a slash is only parried by a guard that just came up and faces you
   if (!net.active && facing > 0.6 && frontHit && info.source === 'katana' && t.parryWindow) { effects.strokeBurst(info.point, INK.ORANGE, 10, 6, { life: 0.25, size: 0.04 }); audio.shieldHit(t.center); game.hitstop(0.08, 0.15); player.weapons[player.katanaIndex].cooldown = Math.max(player.weapons[player.katanaIndex].cooldown, 0.6); input.rumble(0.6, 0.3, 90); hud.tip(ui("Blocked"), 0.9); return; }
-  sendPlayerDamage(t, { amount: Math.round(dmg), from: player.eye.toArray(), point: info.point.toArray(), part: info.part, crit: !!info.crit, src: info.source }, { point: info.point.clone(), dir: info.dir.clone() });
+  sendPlayerDamage(t, { amount: Math.round(dmg), from: player.eye.toArray(), point: info.point.toArray(), aim: player.forward.toArray(), ray: info.dir.toArray(), part: info.part, crit: !!info.crit, src: info.source }, { point: info.point.clone(), dir: info.dir.clone() });
 };
 // a slash through another player's rope cuts it: their client drops the hook
 const _rp = new THREE.Vector3(), _rq = new THREE.Vector3();
@@ -394,7 +529,7 @@ function updatePickups(dt) {
 }
 let pickupClock = 0;
 function updateArenaPickups(dt) {
-  if (!net.isHost) return; pickupClock -= dt;
+  if (!net.isHost || !roundLive() || !level.pickups.length) return; pickupClock -= dt;
   if (pickupClock <= 0 && pickups.length < 10) { pickupClock = 7; spawnPickup('ammo', choose(level.pickups)); }
 }
 
@@ -568,9 +703,10 @@ function updateFocus(dt) {
 const HOW = { rifle: ui("Rifle"), shotgun: ui("Shotgun"), sniper: ui("Sniper"), katana: 'Katana', revolver: 'Revolver', smg: 'SMG', ak47: 'AK-47', m4a1: 'M4A1', dual: ui("Dual Pistols"), famas: 'FAMAS', m249: 'M249', dmr: 'DMR', mine: ui("Mine"), grenade: ui("Grenade"), deflect: ui('Deflected bullet') };
 const howWord = (src) => HOW[src] || null;
 const spawnSpots = () => (level.arenaSpawns && level.arenaSpawns.length ? level.arenaSpawns : level.spawns);
-function arenaSpawn() {
-  const spots = spawnSpots(); const others = [...remote.values()].filter((r) => r.alive && r.root && r.root.visible);
-  const scored = spots.map((s) => ({ s, d: others.reduce((a, r) => Math.min(a, r.body.pos.distanceTo(s)), 999) }));
+function arenaSpawn(owner=net.id) {
+  const spots = spawnSpots();
+  const others = net.isHost ? [...combat.players.values()].filter(p=>p.hp>0&&p.id!==owner&&!friendly(owner,p.id)).map(p=>new THREE.Vector3(...p.pos)) : [...remote.values()].filter(r=>r.alive&&r.root?.visible&&!friendly(owner,r.id)).map(r=>r.body.pos);
+  const scored = spots.map((s) => ({ s, d: others.reduce((a, pos) => Math.min(a, pos.distanceTo(s)), 999) }));
   scored.sort((a, b) => b.d - a.d);
   return choose(scored.slice(0, Math.min(3, scored.length))).s.clone();
 }
@@ -587,12 +723,13 @@ function onLocalDeath() {
     const how = killer ? howWord(h.src) : null;
   // The host ledger emits the death and owns score changes.
   if (game.over) return;
+  if (roundMode()) { game.state='dying'; game.deathT=0; game.respawnAt=Infinity; hud.setRespawn(); hud.tip(ui('Eliminated · Wait for the next round'),4); return; }
   game.respawnT = RESPAWN; game.respawnAt = performance.now() + RESPAWN * 1000; game.state = 'dying'; game.deathT = 0; hud.setRespawn(game.menu ? null : RESPAWN); input.exitLock();
   const kn = killer && scores.get(killer) ? scores.get(killer).name : null;
   hud.kill(kn ? kn + ui(" eliminated you") + (how ? ' · ' + how + (h.crit ? ui(" Headshot") : '') : '') : ui("Out of ink"), 0);
 }
 function respawnLocal() {
-  if (!online() || game.state !== 'dying' || performance.now() < game.respawnAt || game.over) return false;
+  if (!online() || roundMode() || game.state !== 'dying' || performance.now() < game.respawnAt || game.over) return false;
   if (performance.now() - (game.respawnRequestAt || 0) < 500) return false;
   game.respawnRequestAt = performance.now();
   document.activeElement?.blur(); input.suppressUntilRelease(['fire', 'jump', 'confirm']);
@@ -604,13 +741,15 @@ hud.onRespawn = respawnLocal;
 function tallyDeath(victim, killer) {
   const v = scores.get(victim); if (v) v.deaths++;
   if (killer && killer !== victim) { const k = scores.get(killer); if (k) k.kills++; }
+  if(game.matchMode==='tdm'&&killer&&killer!==victim&&TEAMS.includes(teamOf(killer))&&!friendly(killer,victim))game.teamScores[teamOf(killer)]++;
   sendScores(); checkWin();
 }
-function sendScores() { const rows = [...scores.entries()].map(([id, s]) => ({ id, ...s })); net.send('score', rows); applyScores(rows); }
+function sendScores() { if(game.matchMode==='tdm')net.send('team-state',{mode:'tdm',scores:game.teamScores}); const rows = [...scores.entries()].map(([id, s]) => ({ id, ...s })); net.send('score', rows); applyScores(rows); }
 function applyScores(rows) { scores.clear(); for (const r of rows) scores.set(r.id, { name: r.name, kills: r.kills, deaths: r.deaths }); refreshScoreHud(); }
 function sortedScores() { return [...scores.entries()].sort((a, b) => b[1].kills - a[1].kills || a[1].deaths - b[1].deaths); }
 function refreshScoreHud() {
   if (!online()) return;
+  if (teamMode()) { renderTeamHud(); if(!hud.el.board.hidden)hud.setBoard(boardHTML()); return; }
   const rows = sortedScores(); const top = rows.slice(0, 3); const myIdx = rows.findIndex(([id]) => id === net.id);
   if (myIdx >= 3) top.push(rows[myIdx]);
   hud.setPvpScore(top.map(([id, sc]) => `<div class="row${id === net.id ? ' me' : ''}"><span class="rank">${rows.findIndex(([x]) => x === id) + 1}.</span><span>${esc(sc.name)}${id === net.id ? ui(" (you)") : ''}</span><b>${sc.kills}</b></div>`).join('') + ui`<div class="target">Target: ${matchTarget()} kills</div>`);
@@ -618,18 +757,20 @@ function refreshScoreHud() {
   if (!hud.el.board.hidden) hud.setBoard(boardHTML());
 }
 function boardHTML(title = ui("Free for all")) {
+  if(teamMode())return teamBoardHTML();
   const rows = sortedScores();
   return ui`<h3>${title}</h3>${rows.map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}${id === net.id ? ui(" (you)") : ''}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}<div class="foot">Target: ${matchTarget()} kills · Remaining ${mmss(matchLeft)} · Lobby ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</div>`;
 }
 function checkWin() {
-  if (!net.isHost || !online() || game.over) return;
+  if (!net.isHost || !online() || game.over || roundMode()) return;
+  if(game.matchMode==='tdm'){const team=TEAMS.find(t=>game.teamScores[t]>=matchTarget());if(team){const winner={id:'team-'+team,team,name:teamName(team)};net.send('end',winner);endMatch(winner);}return;}
   let winner = null;
   for (const [id, s] of scores) if (s.kills >= matchTarget()) winner = { id, name: s.name };
   if (winner) { net.send('end', winner); endMatch(winner); }
 }
 function endMatch(winner) {
   game.over = winner; game.overT = 0; game.state = 'over'; endFocus(); input.exitLock(); hud.setBoard(null);
-  const title = winner.id === net.id ? ui("You win") : (winner.name || ui("Player")) + ui(" wins");
+  const title = winner.team==='draw' ? ui('Draw') : winner.team ? teamName(winner.team)+ui(' wins') : winner.id === net.id ? ui("You win") : (winner.name || ui("Player")) + ui(" wins");
   hud.setGameplayVisible(false); hud.showScreen(ui`<h1>${esc(title)}</h1><div class="scoreboard">${sortedScores().map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}</div><div class="go" id="overGo">Returning to lobby…</div>`);
 }
 
@@ -643,8 +784,8 @@ function addRemote(id, name) {
 function removeRemote(id) {
   clearHostMines(id); combat.players.delete(id);
   for (const [key, hit] of pendingHits) if (hit.target === id) pendingHits.delete(key); player.ordnance.removePeer(id); const r = remote.get(id); if (r) { r.dispose(); remote.delete(id); } lobby.players.delete(id); scores.delete(id); }
-function lobbyRows() { return [...lobby.players.entries()].map(([id, p]) => ({ id, name: p.name })); }
-function broadcastLobby(render = true) { net.send('lobby', { players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, katana: lobby.katana, killTarget: normalizeKillTarget(lobby.killTarget), shown: net.aliasCode || net.code }); if(render)renderLobby(); }
+function lobbyRows() { return [...lobby.players.entries()].map(([id, p]) => ({ id, name: p.name, team: p.team })); }
+function broadcastLobby(render = true) { net.send('lobby', { matchMode: lobby.matchMode, roundTarget: teamTarget(lobby.roundTarget), players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, katana: lobby.katana, killTarget: normalizeKillTarget(lobby.killTarget), shown: net.aliasCode || net.code }); syncTeamColors(); if(render)renderLobby(); }
 const inMatch = () => ['play', 'dying', 'over'].includes(game.state);
 net.onPeerLeave = (id) => { const nm = (lobby.players.get(id) || {}).name; removeRemote(id); broadcastLobby(); if (inMatch()) { hud.kill((nm || ui("Player")) + ui(" left"), 0); sendScores(); } };
 net.onDisconnect = () => leaveOnline(ui('The host left'));
@@ -653,19 +794,21 @@ net.hostName = myName;
 net.onPeerJoin = (from, meta) => {
   const name = (typeof meta?.name === 'string' ? meta.name : 'doodle').slice(0, 14);
 
-  lobby.players.set(from, { name }); addRemote(from, name); broadcastLobby();
-  if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, katana: lobby.katana, killTarget: game.killTarget, vitals: combat.views(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
+  lobby.players.set(from, { name, team: balancedTeam() }); addRemote(from, name); broadcastLobby();
+  if (roundMode() && inMatch() && !game.over) { addLateTeammate(from,name); return; }
+  if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, matchMode: game.matchMode, katana: lobby.katana, killTarget: game.killTarget, vitals: combat.views(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
 };
 net.on('lobby', (d) => {
+  lobby.matchMode = ['teams','tdm'].includes(d.matchMode) ? d.matchMode : 'ffa'; lobby.roundTarget=teamTarget(d.roundTarget);
   lobby.katana = d.katana !== false; lobby.killTarget = normalizeKillTarget(d.killTarget); lobby.hostId = d.hostId; lobby.isPublic = !!d.isPublic; lobby.code = net.code; lobby.shown = d.shown || net.code; if (d.map) lobby.map = knownMap(d.map); lobby.order = d.players.map((p) => p.id); lobby.players.clear();
-  for (const p of d.players) lobby.players.set(p.id, { name: p.name });
+  for (const p of d.players) lobby.players.set(p.id, { name: p.name, team: TEAMS.includes(p.team)?p.team:'red' });
   for (const p of d.players) if (p.id !== net.id) addRemote(p.id, p.name);
   for (const id of [...remote.keys()]) if (!lobby.players.has(id)) removeRemote(id);
   if (inMatch()) { for (const p of d.players) if (!scores.has(p.id)) scores.set(p.id, { name: p.name, kills: 0, deaths: 0 }); refreshScoreHud(); }
-  renderLobby();
+  syncTeamColors(); renderLobby();
 });
 net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || ui("Player")) + ui(" left"), 0); renderLobby(); });
-net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; lobby.katana = d.katana !== false; lobby.killTarget = normalizeKillTarget(d.killTarget); if (d.map) lobby.map = knownMap(d.map); startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); for (const v of d.vitals || []) applyVitals(v); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
+net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; lobby.katana = d.katana !== false; lobby.killTarget = normalizeKillTarget(d.killTarget); if (d.map) lobby.map = knownMap(d.map); lobby.matchMode=d.matchMode==='tdm'?'tdm':'ffa'; startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); for (const v of d.vitals || []) applyVitals(v); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
 net.on('end', (d) => endMatch(d));
 net.on('backtolobby', () => { if (!net.isHost) toLobbyScreen(); });
 net.on('pickup', (d) => { if (!net.isHost) spawnPickup(d.kind, new THREE.Vector3().fromArray(d.pos), d.id); });
@@ -748,10 +891,11 @@ function netUpdate(dt) {
     if (snap) net.send('ps', snap, true);
   }
   if (shotQueue.length) net.broadcast('shots', { k: player.weapon.kind, e: shotQueue.splice(0) });
+  if(roundMode()) { updateTeamMatch(dt); return; }
   if (net.isHost && inMatch() && remote.size > 0) game.clockStarted = true;
   const clockOn = inMatch() && !game.over && (net.isHost ? !!game.clockStarted : clockRunning);
   if (inMatch() && !game.over) { if (clockOn) matchLeft = Math.max(0, matchLeft - dt); if (net.isHost) { clockT -= dt; if (clockT <= 0) { clockT = 2; net.send('clock', { left: Math.round(matchLeft), on: clockOn }); } } hud.setTimer(clockOn ? mmss(matchLeft) : ui("The timer starts when another player joins")); }
-  if (net.isHost && clockOn) { game.matchT += dt; if (matchLeft <= 0) { const rows = sortedScores(); const w = rows.length ? { id: rows[0][0], name: rows[0][1].name } : { id: net.id, name: myName }; net.send('end', w); endMatch(w); } }
+  if (net.isHost && clockOn) { game.matchT += dt; if (matchLeft <= 0) { const rows = sortedScores(); const w = game.matchMode==='tdm' ? tdmTimeWinner() : rows.length ? { id: rows[0][0], name: rows[0][1].name } : { id: net.id, name: myName }; net.send('end', w); endMatch(w); } }
 }
 function leaveOnline(reason) {
   net.leave(); for (const id of [...remote.keys()]) removeRemote(id); lobby.players.clear(); scores.clear(); hud.setBoard(null);
@@ -762,7 +906,7 @@ async function createLobby(isPublic) {
   setStatus(ui("Creating room…"));
   try { await net.host({ isPublic }); }
   catch (err) { setStatus(friendlyError(err)); unlockButtons(); return; }
-  lobby.isPublic = isPublic; lobby.map = mapKey; lobby.players.clear(); lobby.players.set(net.id, { name: myName }); lobby.hostId = net.id; lobby.status = '';
+  lobby.isPublic = isPublic; lobby.map = mapKey; lobby.players.clear(); lobby.players.set(net.id, { name: myName, team: 'red' }); lobby.hostId = net.id; lobby.status = '';
   game.state = 'lobby'; screen = 'lobby'; showStart();
 }
 async function joinLobby(code) {
@@ -826,6 +970,7 @@ function mapSketch(key) {
     return `<svg class="map-sketch" viewBox="-56 -56 112 112" aria-hidden="true"><path d="${outline}" fill="currentColor" fill-opacity=".16" fill-rule="evenodd"/></svg>`;
   }
   const shapes = {
+    ...Object.fromEntries(Object.entries(TEAM_BLOCKS).map(([k,blocks])=>[k,blocks.map(([x,z,w,d])=>[x-w/2,z-d/2,w,d])])),
     district: [[-43, 4, 18, 16], [24, 4, 20, 16], [-7, -7, 14, 14], [-48, -34, 96, 8]],
     harbor: [[-28, -26, 12, 14], [16, -26, 12, 14], [-28, 12, 12, 14], [16, 12, 12, 14], [-39, -27, 6, 10], [-39, -5, 6, 10], [-39, 17, 6, 10], [33, -27, 6, 10], [33, -5, 6, 10], [33, 17, 6, 10], [-34, -32, 68, 2]],
     canyon: [[-40, -28, 24, 56], [16, -28, 24, 56], [-16, -14, 32, 4], [-16, 10, 32, 4]],
@@ -841,7 +986,8 @@ function mapSketch(key) {
 }
 function mapHTML(sel, canPick) {
   if (LEVELS.length < 2) return '';
-  return ui`<div class="mapsel" id="mapsel" role="group" aria-label="Map selection"><span>CHOOSE A MAP · ${LEVELS.length} maps</span><div class="mapgrid">${LEVELS.map(m => `<button type="button" class="mapbtn map-${m.style}${m.key === sel ? ' on' : ''}" data-map="${m.key}" aria-pressed="${m.key === sel}" ${canPick ? '' : 'disabled'}>${mapSketch(m.key)}<strong>${m.name}</strong><i>${m.blurb}</i><small>${m.key === sel ? ui("SELECTED") : ui("SELECT")}</small></button>`).join('')}</div></div>` + appearanceHTML(sel);
+  const maps = game.state==='lobby' && lobby.matchMode==='teams' ? LEVELS.filter(m=>teamMaps.includes(m.key)) : LEVELS;
+  return ui`<div class="mapsel" id="mapsel" role="group" aria-label="Map selection"><span>CHOOSE A MAP · ${maps.length} maps</span><div class="mapgrid">${maps.map(m => `<button type="button" class="mapbtn map-${m.style}${m.key === sel ? ' on' : ''}" data-map="${m.key}" aria-pressed="${m.key === sel}" ${canPick ? '' : 'disabled'}>${mapSketch(m.key)}<strong>${m.name}</strong><i>${m.blurb}</i><small>${m.key === sel ? ui("SELECTED") : ui("SELECT")}</small></button>`).join('')}</div></div>` + appearanceHTML(sel);
 }
 function wireMap(onPick) { const box = hud.el.panel.querySelector('#mapsel'); if (!box) return; box.addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('.mapbtn'); if (b && !b.disabled) { onPick(b.dataset.map); hud.el.panel.querySelector('#appearance')?.scrollIntoView({ block: 'nearest' }); } }); }
 function appearanceHTML(key) {
@@ -866,7 +1012,7 @@ function mainHTML() {
       <p>Original game: <strong>DoodleShooter · iifor</strong><br>A community remix of DoodleShooter. Thanks to the original creator and contributors!</p>
       <nav aria-label="Original game links"><a href="https://doodleshooter.vercel.app/" target="_blank" rel="noopener noreferrer">Play the original ↗</a><a href="https://github.com/iifor/doodleshooter" target="_blank" rel="noopener noreferrer">iifor / GitHub source ↗</a></nav>
     </section>
-    <div class="mainbtns"><button type="button" class="start" id="soloBtn">PLAY<i>Solo · Survive the waves</i></button><button type="button" id="onlineBtn">ONLINE<i>Free for all · Up to 25 players</i></button></div>
+    <div class="mainbtns"><button type="button" class="start" id="soloBtn">PLAY<i>Solo · Survive the waves</i></button><button type="button" id="onlineBtn">ONLINE<i>Free for all / Teams · Up to 25 players</i></button></div>
     ${mapHTML(mapKey, true) + `<button type="button" class="play-map" id="playMapBtn">${ui('Play selected map')}</button>`}${CONTROLS_HTML}${settingsHTML()}${checkpointHTML()}${best ? ui`<div class="beststat">Best score：${best}</div>` : ''}`;
 }
 function onlineHTML() {
@@ -884,6 +1030,7 @@ function onlineHTML() {
     </div>`;
 }
 function lobbyHTML() {
+  if(lobby.matchMode!=='ffa')return teamLobbyHTML();
   const rows = lobbyRows(); const host = net.isHost; const n = rows.length;
   const startButton = host ? `<button type="button" class="big" id="startBtn">${ui('Start match')}</button>` : `<span class="hint" id="hostWait">${ui('Waiting for the host to start')}</span>`;
   return ui`<h1>Lobby</h1><h2>Free for all · Target: ${matchTarget()} kills · ${n}/${net.maxPlayers} players</h2>
@@ -911,6 +1058,7 @@ async function refreshLobbies() {
 function wireOnline() {
   const box = hud.el.panel.querySelector('#online'); if (!box) return;
   box.addEventListener('click', (e) => e.stopPropagation()); box.addEventListener('keydown', (e) => e.stopPropagation());
+  const controls=hud.el.panel.querySelector('#moderation'),maps=box.querySelector('#mapsel');if(game.state==='lobby'&&controls&&maps)maps.before(controls);
   const q = (id) => box.querySelector('#' + id); wireName(box); wireModeration();
   if (q('quickBtn')) q('quickBtn').addEventListener('click', () => { lockButtons(box); quickPlay(); });
   if (q('createBtn')) q('createBtn').addEventListener('click', () => { lockButtons(box); createLobby(box.querySelector('input[name=vis]:checked').value === 'public'); });
@@ -945,12 +1093,13 @@ function showStart() {
 function showPause() {
   if (online()) {
     hud.showScreen(ui`<h1>Menu</h1><h2>Free for all · Lobby ${String(net.aliasCode || net.code || '').replace(/-\d+$/, '')}</h2><div class="scoreboard">${sortedScores().map(([id, s]) => ui`<div class="${id === net.id ? 'me' : ''}"><span>${esc(s.name)}</span><span>${s.kills} kills · ${s.deaths} deaths</span></div>`).join('')}</div>${CONTROLS_HTML}${settingsHTML()}<div class="online" id="online"><div class="row"><button type="button" class="alt" id="leaveBtn">Leave match</button></div></div><div class="go">Click to resume or press ${hud.key('confirm')} </div>`);
+    if(teamMode()){hud.el.panel.querySelector('h2').textContent=(roundMode()?ui('Team elimination'):ui('Team Deathmatch'))+' · '+teamName(teamOf(net.id));hud.el.panel.querySelector('.scoreboard').innerHTML=teamBoardHTML();}
     hud.el.panel.insertAdjacentHTML('beforeend',moderationHTML()); wireSettings(); wireOnline(); return;
   }
   hud.showScreen(ui`<h1>Paused</h1><h2>${mapName(level.key)} · Wave ${game.wave} · Score ${game.score}</h2>${CONTROLS_HTML}${settingsHTML()}${menuBtnHTML()}<div class="go">Click to resume or press ${hud.key('confirm')} </div>`);
   wireSettings(); wireMenuBtn();
 }
-function showClickToPlay() { hud.showScreen(ui`<h1>Match ready</h1><h2>Free for all · Target: ${matchTarget()} kills</h2><div class="go">Click to start or press ${hud.key('confirm')} .</div>`); }
+function showClickToPlay() { if(teamMode()){hud.showScreen(`<h1>${ui('Match ready')}</h1><h2>${roundMode()?ui('Team elimination'):ui('Team Deathmatch')} · ${teamName(teamOf(net.id))}</h2><div class="go">${ui('Click to play')}</div>`);return;} hud.showScreen(ui`<h1>Match ready</h1><h2>Free for all · Target: ${matchTarget()} kills</h2><div class="go">Click to start or press ${hud.key('confirm')} .</div>`); }
 function showDead() {
   hud.setGameplayVisible(false); const nb = game.score > best; if (nb) { best = game.score; localStorage.setItem('doodle_best', String(best)); }
   hud.showScreen(ui`<h1>Out of ink</h1><div class="stats"><b>${game.wave}</b> wave · <b>${game.kills}</b> kills · Score <b>${game.score}</b>${nb ? ui(" · <b>New record</b>") : ui` · Best score ${best}`}</div>${checkpointHTML()}${menuBtnHTML()}<div class="go">Click to play again or press ${hud.key('confirm')} </div>`);
@@ -975,23 +1124,26 @@ function beginAtWave(n) { game.mode = 'solo'; setArena(false); beginCommon(); re
 function jumpToWave(n) { enemies.clear(); effects.clear(); enemies.mods.speed = 1; enemies.mods.damage = 1; endFocus(); game.intermission = 0; game.queue = []; startWave(n); hud.hideScreen(); hud.setGameplayVisible(true); game.state = 'play'; game.menu = false; audio.reelLoop(false); }
 function hostStart() {
   if (!net.active || !net.isHost) return;
+  if(lobby.matchMode==='teams'){hostStartTeams();return;}
+  if(lobby.matchMode==='tdm'&&!TEAMS.every(t=>[...lobby.players.values()].some(p=>p.team===t))){lobby.status=ui('Both teams need at least one player');renderLobby();return;}
   scores.clear(); for (const [id, p] of lobby.players) scores.set(id, { name: p.name, kills: 0, deaths: 0 });
   // deal everyone a different spot, shuffled so the same people do not always start together
   setArena(true); const order = spawnSpots().map((_, i) => i); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
   const spawns = {}; [...lobby.players.keys()].forEach((id, i) => { spawns[id] = order[i % order.length]; });
   hostMines.clear();approvedGrenades.clear();startMatch(false, spawns[net.id]); combat.clear(lobby.katana);
   for (const id of lobby.players.keys()) applyVitals(combat.add(id, spawnSpots()[spawns[id]].toArray()));
-  net.send('start', { spawns, map: lobby.map || mapKey, katana: lobby.katana, killTarget: game.killTarget, vitals: [...combat.players.values()].map(p => combat.view(p, true)) }); sendScores();
+  net.send('start', { spawns, matchMode: game.matchMode, map: lobby.map || mapKey, katana: lobby.katana, killTarget: game.killTarget, vitals: [...combat.players.values()].map(p => combat.view(p, true)) }); sendScores();
 }
 function startMatch(late, spawnIdx) {
+  game.matchMode=lobby.matchMode==='tdm'?'tdm':'ffa'; game.teamScores={red:0,blue:0}; game.round=null; teamMatch=null;
   pendingHits.clear(); deathEvents.clear(); game.killTarget = normalizeKillTarget(lobby.killTarget); game.katanaAllowed = lobby.katana !== false;
-  net.inMatch = true; game.mode = 'ffa'; setArena(true); resetGame(); matchLeft = FFA_TIME; clockT = 0; game.clockStarted = false;
+  net.inMatch = true; game.mode = 'ffa'; syncTeamColors(); setArena(true); resetGame(); matchLeft = FFA_TIME; clockT = 0; game.clockStarted = false;
   // nobody sends snapshots in the lobby, so the silence clock restarts here or the sweep would drop everyone
   for (const r of remote.values()) r.lastSeen = performance.now();
   if (!scores.size) for (const [id, p] of lobby.players) scores.set(id, { name: p.name, kills: 0, deaths: 0 });
   const spots = spawnSpots(); player.reset(spawnIdx != null && spots[spawnIdx] ? spots[spawnIdx].clone() : arenaSpawn()); beginCommon(); game.state = 'play'; screen = 'lobby'; player.shieldT = 2;
   if (late) net.broadcast('mine-sync', { map: level.key });
-  refreshScoreHud(); hud.message(ui("Free for all"), late ? ui("Joined a match in progress") : ui("Target: ") + matchTarget() + ui(" kills · ") + Math.round(FFA_TIME / 60) + ui(" minutes · Everyone is a rival"), 3);
+  refreshScoreHud(); hud.message(teamMode()?ui("Team Deathmatch"):ui("Free for all"), late ? ui("Joined a match in progress") : ui("Target: ") + matchTarget() + ui(" kills · ") + Math.round(FFA_TIME / 60) + (teamMode()?ui(" minutes · Every kill counts for your team"):ui(" minutes · Everyone is a rival")), 3);
   hud.tip(ui`Scoreboard: <b>${hud.key('score')}</b> hold.`, 5);
   // a match started by someone else's click cannot grab the mouse: ask for a click
   setTimeout(() => { if (game.state === 'play' && !input.pointerLocked && !input.usingGamepad) { game.menu = true; showClickToPlay(); } }, 250);
@@ -1070,6 +1222,7 @@ function step(now) {
     game.time += dt; if (st === 'start' || st === 'dead' || st === 'lobby' || st === 'over') player.idleCam(game.time); effects.update(dt); if (net.active) netUpdate(dt);
     if (st === 'over') { game.overT += dt; if (net.isHost && game.overT > 8) { net.send('backtolobby', {}); toLobbyScreen(); } else if (!net.isHost && game.overT > 15) { toLobbyScreen(); } }
   }
+  spectateTeammate();
   audio.setListener(player.eye, player.right);
   const w = player.weapon; if (w.isGun) hud.setAmmo(w.mag, w.reserveText, w.magSize, w.reloading); else hud.setKatana();
   hud.setSupport(player.ordnance);
@@ -1079,7 +1232,7 @@ function step(now) {
   else hud.setFocusMeter(playing && (w.kind === 'katana' || game.katanaStreak > 0 || game.focus.active), game.focus.active ? 1 : clamp(game.katanaStreak / KATANA_CHARGE_KILLS, 0, 1), game.focus.active, 'Katana');
   if (game.boss) { if (game.boss.alive) hud.setBoss(game.boss.T.name, game.boss.hp / game.boss.maxHp); else { hud.setBoss(null, null); game.boss = null; } }
   audio.setIntensity(clamp((enemies.alive + game.queue.length + remote.size * 2) / 12, 0, 1) * (game.intermission > 0 ? 0.25 : 1));
-  hud.setRespawn(online() && game.state === 'dying' && !game.menu ? game.respawnT : null);
+  hud.setRespawn(online() && !roundMode() && game.state === 'dying' && !game.menu ? game.respawnT : null);
   nameplates.update(remote, R.camera, world, online() && game.state === 'play' && !game.menu && player.alive);
   R.render(game.time, { hurt: player.hurtFx, flash: player.flashFx, slow: scale < 1 ? 1 : 0, lowHp: player.alive && player.hp < 30 ? 1 - player.hp / 30 : 0 });
 }

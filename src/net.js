@@ -10,7 +10,7 @@ import { ui } from './i18n.js';
 
 // a local dev server gets its own namespace so testing can never wander into a live lobby
 const LOCAL = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
-const PREFIX = LOCAL ? 'doodle-remix-dev-v11-' : 'doodle-remix-v11-';
+const PREFIX = LOCAL ? 'doodle-remix-dev-v12-' : 'doodle-remix-v12-';
 const PUBLIC_SLOTS = 16;
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const makeCode = () => Array.from({ length: 5 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
@@ -67,7 +67,7 @@ export class Net {
 
     // Match/lobby authority belongs to the connected host. Do this before
     // forwarding, so a guest cannot relay or spoof a host control message.
-    if (['start', 'startreq', 'lobby', 'end', 'backtolobby', 'kick', 'score', 'clock', 'leave', 'pickup', 'taken', 'feed', 'combat-state', 'combat-death', 'combat-result', 'cut', 'parry', 'refused', 'scene-pong'].includes(msg.t)) {
+    if (['team-round', 'team-state', 'start', 'startreq', 'lobby', 'end', 'backtolobby', 'kick', 'score', 'clock', 'leave', 'pickup', 'taken', 'feed', 'combat-state', 'combat-death', 'combat-result', 'cut', 'parry', 'refused', 'scene-pong'].includes(msg.t)) {
       if (this.isHost || from !== this.hostId || (msg.from && msg.from !== this.hostId)) return;
     }
     if (this.isHost) {

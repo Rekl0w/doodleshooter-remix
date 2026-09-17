@@ -1,6 +1,6 @@
 # DoodleShooter Remix
 
-**11 maps, 11 guns, a katana, and grappling through the sky.** Survive waves on your own or challenge friends in online free for all.
+**13 maps, 11 guns, a katana, and grappling through the sky.** Survive waves on your own or challenge friends in online free for all, team elimination, or Team Deathmatch.
 
 ## Original game and credits
 
@@ -13,7 +13,7 @@ This is a community remix of **[DoodleShooter by iifor](https://github.com/iifor
 
 ## Features
 
-- **11 maps:** compact VS arenas, large dense forests, a Dust 2 adaptation, and a city with 24 towers.
+- **13 maps:** compact VS arenas, large dense forests, a Dust 2 adaptation, and a city with 24 towers, and two enclosed team arenas.
 - **Weapons:** rifle, shotgun, sniper, revolver, SMG, AK-47, M4A1, dual pistols, FAMAS, M249, DMR, and katana.
 - **Clearer SMG aiming:** raised thin-frame sight and more eye relief keep the gun below the center view.
 - **Adjustable scopes:** sniper 2× / 4× / 8×; DMR 2× / 3× / 4× / 6×.
@@ -21,9 +21,9 @@ This is a community remix of **[DoodleShooter by iifor](https://github.com/iifor
 - **Grenades and mines:** expanded blast areas, cover-aware damage, and online synchronization.
 - **Solo resupply:** improved ammo drops, katana kill rewards, and unlimited revolver reserve ammo.
 - **English by default, optional Turkish:** use **Language / Dil** in the main menu. Your choice is saved locally; changing language reloads the menu. Players using different languages can share the same lobby.
-- **Two visual styles on every map:** after selecting a map, choose **Lined notebook** or **Solid colors**. Solid mode removes paper lines, crosshatching, and outline wobble. Your preference is saved per map and only affects your own view, including online games.
+- **Two visual styles on every map:** after selecting a map, choose **Lined notebook** or **Solid colors**. Solid mode removes paper lines, crosshatching, and outline wobble, with richer turquoise, terracotta, wood and foliage colors. Team characters use dedicated red and blue colors. Your preference is saved per map and only affects your own view, including online games.
 - **Online feedback:** hit markers confirm damage accepted by the host, with clear spawn-protection feedback. Player names follow visible opponents and stay hidden behind cover.
-- **Respawning:** after the countdown, click **Respawn** or press Space / Enter. Mouse movement and held buttons do not respawn you accidentally.
+- **Respawning in free for all and Team Deathmatch:** after the countdown, click **Respawn** or press Space / Enter. Mouse movement and held buttons do not respawn you accidentally.
 - Mouse sensitivity, inverted look, music settings, map previews, and gamepad support.
 - Fixes for repeated wall jumping, weapon poses, reload states, and leaving map boundaries.
 
@@ -64,7 +64,9 @@ Use the wheel to reach M249 and DMR. E does not reel in the rope. Gamepad bindin
 | Deep Forest | 288 × 288; dense pines, rocks, and cabins |
 | Lost Woods | 352 × 352; ruins and plenty of hiding places |
 | Dust 2 · Remix | Radar-based long, short, mid, A/B sites, and tunnels |
-| Skyline City | 24 buildings, elevated bridges, and grappling routes |
+| Skyline City | 24 buildings, 24 safe rooftop spawns plus 10 street spawns, elevated bridges, and grappling routes |
+| Foundry | Three routes around machine halls, shielded spawn rooms, and close cover |
+| Old Quarter | Winding alleys, covered passages, courtyards, and protected spawns |
 
 ![Dust 2 Remix — current map overview](docs/images/dust2.png)
 ![Skyline City](docs/images/skyline.png)
@@ -78,22 +80,30 @@ Dust II is based on **Counter-Strike / Valve** references: [Valve's Dust II pres
 1. Everyone opens the same up-to-date game URL.
 2. Choose **ONLINE → Private · Friends → Create room**.
 3. Share the room code; friends enter it and press **Join**.
-4. The **host** chooses the map, sets **Allow katana** and the **Kill target** (1–999), and presses **Start match**. Guests wait for the host; they cannot start the match or change the map.
+4. The **host** chooses **Game mode**, the map, **Allow katana**, and the score/round target, then presses **Start match**. Guests wait for the host; they cannot start the match or change the map.
 
 After the map is selected, each player can choose their own visual style below the map cards.
 
-Up to **25 players**, with a host-selected target of **1–999 kills** (default: 20). Joining a match already in progress is supported. Use **Quick play** to find public rooms.
+Up to **25 players**. Free for all and Team Deathmatch use a host-selected target of **1–999 kills** (default: 20); team elimination uses round wins. Joining a match already in progress is supported. Use **Quick play** to find public rooms.
 
-PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v11` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
+PeerJS handles discovery and WebRTC carries player traffic. The host's browser runs the match. This release uses the `v12` room namespace so older gameplay versions cannot join it. Internet access is required; some NAT/firewall configurations may block direct connections. There is no TURN relay or server-side anti-cheat.
+
+### Team modes
+
+Choose **Game mode** in the lobby. Players choose **Red team** or **Blue team**; the host can assign anyone. New arrivals are balanced automatically. Each side supports 13 players, within the room total of 25. Teams lock when the match starts and friendly fire is disabled, including grenades, mines and rope cutting.
+
+- **Team elimination:** first **16 round wins** by default; the host can choose **1–99**. Everyone respawns together with full health and supplies. A round starts with a three-second freeze, lasts up to two minutes, and ends when one team is eliminated. At timeout, more survivors wins; equal survivor counts use remaining total health, and an exact tie draws. No passive healing. Eliminated players watch a living teammate and wait; late arrivals also wait for the next round. Sides swap after `target − 1` completed rounds. This mode offers **Dust 2, Foundry and Old Quarter**, with 13 safe spawns per side and no spawn-to-spawn sightline. It is elimination, not bomb defusal.
+- **Team Deathmatch:** kills accumulate for the whole team. The host chooses a **1–999 kill target** (default 20); the ten-minute timer also applies. Players use the normal respawn countdown and can join a running match immediately. All **13 maps** are available, including Skyline City's rooftop spawns. Team totals persist when a player leaves. At timeout the higher team score wins; equal scores draw.
+- If the last member of a team leaves an elimination match, the other team wins by forfeit. If the host leaves, the room ends.
 
 ### Moderation and temporary anti-cheat
 
 - The host can **Kick** a player from the lobby or the in-match **Esc → Menu → Manage players** panel. Removing a player closes their connection and removes them from every roster. The current room remembers their peer ID and browser ID; changing only their name does not bypass removal.
-- **Kill target** is set by the host before each round and stays fixed during the match. The chosen target is shown to all players, including late joiners. The existing 10-minute match timer still applies.
-- **Allow katana** is set before each round. Disabled katana is skipped by weapon cycling and quick melee, and the host rejects katana damage. Late joiners inherit the same rule.
-- The host owns health, spawn protection, accepted damage, deaths, scores and respawns. Hit proposals are checked for weapon damage, cadence, replay, life generation, range and cover. Grenades and mines damage players through host simulation; health pickups and regeneration also use the host ledger.
+- **Kill target** is set by the host before each match and stays fixed during the match. The chosen target is shown to all players, including late joiners. The existing 10-minute match timer still applies.
+- **Allow katana** is set before each match. Disabled katana is skipped by weapon cycling and quick melee, and the host rejects katana damage. Late joiners inherit the same rule.
+- The host owns health, spawn protection, accepted damage, deaths, scores and respawns. Hit proposals are checked for weapon damage, cadence, replay, life generation, range, cover, and consistency between aim, bullet direction and impact position. Grenades and mines damage players through host simulation; health pickups and regeneration also use the host ledger.
 - A modified guest cannot stay alive for everyone else by ignoring damage or forging health, death, invisibility or host-control messages. Killing the guest still updates the host score, and attacks from their dead life are rejected.
-- **The host must be trusted.** This is a temporary P2P safeguard, not complete anti-cheat: there is no trusted dedicated server, authoritative movement/ammunition simulation, or aimbot prevention. A malicious host can still change match decisions. Anonymous room removal can be bypassed by changing/clearing browser identity. Client-side code and keys cannot be made secret from the person running the browser.
+- **The host must be trusted.** This is a temporary P2P safeguard, not complete anti-cheat: there is no trusted dedicated server, authoritative movement/ammunition simulation, or reliable aimbot detection. Shot-ray consistency rejects basic forged impacts, but a cheat can forge a coherent aim and ray or automate legitimate inputs. High accuracy alone never triggers an automatic kick. A malicious host can still change match decisions. Anonymous room removal can be bypassed by changing/clearing browser identity. Client-side code and keys cannot be made secret from the person running the browser.
 - The room ends when its host leaves; combat authority is not transferred to another player. These safeguards require no new hosting service or paid backend.
 
 ## Run locally
@@ -132,6 +142,10 @@ Start the local server, then use a Playwright installation:
 ```bash
 npm install --no-save --package-lock=false playwright
 npx playwright install chromium
+node tests/team-rules.mjs
+node tests/team-maps.mjs
+node tests/teams.mjs
+node tests/team-deathmatch.mjs
 node tests/host-combat.mjs
 node tests/authority.mjs
 node tests/match-rules.mjs

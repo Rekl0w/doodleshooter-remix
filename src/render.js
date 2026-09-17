@@ -2,7 +2,7 @@
 // full-screen "pen on lined paper" pass draws outlines, hatching, paper grain and ruled lines.
 import * as THREE from 'three';
 
-export const INK = { BLUE: 0, RED: 1, BLACK: 2, ORANGE: 3, GREEN: 4, PINK: 5 };
+export const INK = { BLUE: 0, RED: 1, BLACK: 2, ORANGE: 3, GREEN: 4, PINK: 5, TEAM_RED: 6, TEAM_BLUE: 7 };
 export const INK_COLORS = [
   new THREE.Vector3(0.10, 0.19, 0.76), // blue ballpoint
   new THREE.Vector3(0.86, 0.12, 0.20), // red pen
@@ -10,6 +10,8 @@ export const INK_COLORS = [
   new THREE.Vector3(0.92, 0.55, 0.08), // orange highlighter
   new THREE.Vector3(0.12, 0.60, 0.30), // green
   new THREE.Vector3(0.90, 0.40, 0.66), // pink eraser
+  new THREE.Vector3(0.92, 0.10, 0.15), // red team
+  new THREE.Vector3(0.10, 0.30, 0.96), // blue team
 ];
 export const LIGHT_WORLD = new THREE.Vector3(0.38, 0.82, 0.42).normalize();
 export const shared = { uLightDir: { value: new THREE.Vector3(0, 1, 0) }, uTime: { value: 0 } };
@@ -92,7 +94,7 @@ uniform float uDesert;
 uniform float uSolid;
 uniform float uLowHp;
 uniform vec3 uPaper;
-uniform vec3 uInks[6];
+uniform vec3 uInks[8];
 uniform mat4 uInvProj;
 uniform mat4 uInvView;
 
@@ -106,7 +108,7 @@ float linDepth(float z) { float zn = z * 2.0 - 1.0; return 2.0 * uNear * uFar / 
 vec3 inkColor(float id) {
   int i = int(id + 0.5);
   if (i <= 0) return uInks[0]; if (i == 1) return uInks[1]; if (i == 2) return uInks[2];
-  if (i == 3) return uInks[3]; if (i == 4) return uInks[4]; return uInks[5];
+  if (i == 3) return uInks[3]; if (i == 4) return uInks[4]; if (i == 6) return uInks[6]; if (i == 7) return uInks[7]; return uInks[5];
 }
 float stripes(vec2 p, vec2 dir, float spacing, float width) {
   float t = dot(p, vec2(-dir.y, dir.x));
@@ -214,24 +216,30 @@ void main() {
   // Solid mode removes ruled paper and crosshatching on every map. Dust keeps
   // its warm palette; the other maps use softer stone, timber and foliage.
   if (uSolid > 0.5) {
-    vec3 base = vec3(0.72, 0.76, 0.77);
+    vec3 base = vec3(0.40, 0.67, 0.73);
     if (s.g > 0.5 && s.g < 1.5) base = vec3(0.76, 0.16, 0.10);
     else if (s.g > 1.5 && s.g < 2.5) base = vec3(0.30, 0.22, 0.15);
-    else if (s.g > 2.5 && s.g < 3.5) base = vec3(0.83, 0.71, 0.53);
-    else if (s.g > 3.5 && s.g < 4.5) base = vec3(0.42, 0.44, 0.28);
+    else if (s.g > 2.5 && s.g < 3.5) base = vec3(0.89, 0.68, 0.39);
+    else if (s.g > 3.5 && s.g < 4.5) base = vec3(0.38, 0.56, 0.23);
     else if (s.g > 4.5) base = vec3(0.65, 0.58, 0.46);
     if (uDesert < 0.5) {
-      base = vec3(0.68, 0.73, 0.76);
+      base = vec3(0.32, 0.64, 0.75);
       if (s.g > 0.5 && s.g < 1.5) base = vec3(0.82, 0.22, 0.17);
-      else if (s.g > 1.5 && s.g < 2.5) base = vec3(0.34, 0.27, 0.21);
-      else if (s.g > 2.5 && s.g < 3.5) base = vec3(0.80, 0.66, 0.43);
-      else if (s.g > 3.5 && s.g < 4.5) base = vec3(0.34, 0.55, 0.32);
-      else if (s.g > 4.5) base = vec3(0.66, 0.68, 0.57);
+      else if (s.g > 1.5 && s.g < 2.5) base = vec3(0.43, 0.30, 0.19);
+      else if (s.g > 2.5 && s.g < 3.5) base = vec3(0.88, 0.62, 0.29);
+      else if (s.g > 3.5 && s.g < 4.5) base = vec3(0.25, 0.62, 0.31);
+      else if (s.g > 4.5) base = vec3(0.73, 0.43, 0.62);
     }
+    // Upward surfaces use a quieter ground tint; walls and props keep their hue.
+    vec3 vn = vec3(s.ba, sqrt(max(0.0, 1.0 - dot(s.ba, s.ba))));
+    float horizontal = smoothstep(0.82, 0.98, abs((mat3(uInvView) * vn).y));
+    if (s.g < 0.5) base = mix(base, uDesert > 0.5 ? vec3(0.83,0.69,0.47) : vec3(0.58,0.69,0.57), horizontal * 0.7);
+    if (s.g > 5.5 && s.g < 6.5) base = vec3(0.98,0.12,0.19);
+    if (s.g > 6.5) base = vec3(0.13,0.32,1.0);
     float light = shade < 0.0 ? 0.6 : 0.55 + 0.45 * shade;
     col = base * light;
     col *= 1.0 - edge * 0.21 * fadeE;
-    col = mix(col, vec3(0.82, 0.83, 0.79), smoothstep(65.0, 240.0, d) * 0.28);
+    col = mix(col, vec3(0.72, 0.83, 0.88), smoothstep(65.0, 240.0, d) * 0.18);
     if (sky) col = mix(vec3(0.78, 0.85, 0.88), vec3(0.40, 0.65, 0.83), smoothstep(0.0, 1.0, vUv.y));
   }
 

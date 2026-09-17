@@ -27,7 +27,7 @@ const setup = () => {
   c.add('b', [0, 0, -3]);
   time = 3;
 };
-const packet = (extra = {}) => ({
+const packet = (extra = {}) => { const d = {
   id: String(++sequence),
   target: 'b',
   life: c.players.get('b').life,
@@ -38,7 +38,7 @@ const packet = (extra = {}) => ({
   part: 'torso',
   amount: 999999,
   ...extra
-});
+}; const offset=d.point.map((v,i)=>v-d.from[i]); const ray=offset.map(v=>v/Math.hypot(...offset)); return {aim:ray,ray,...d}; };
 const snap = (id, extra = {}) => {
   const p = c.players.get(id),
     s = [...p.pos, 0, 0, 0, 64, 110, 0, 0, 0, 0, 0, 0, p.life];

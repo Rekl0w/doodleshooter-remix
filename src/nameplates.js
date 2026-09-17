@@ -15,7 +15,7 @@ export class Nameplates {
     for (const [id, player] of players) {
       let label = this.labels.get(id);
       if (!label) { label = document.createElement('div'); label.className = 'player-name'; label.dataset.peer = id; this.layer.append(label); this.labels.set(id, label); }
-      label.hidden = true;
+      label.hidden = true; label.dataset.team = player.team || '';
       if (!player.alive || player.corpse || player.away || !player.root?.visible || !player.snapB) continue;
       const head = player.hitSpheres[0];
       this.point.copy(head); this.point.y += .55; this.point.project(camera);

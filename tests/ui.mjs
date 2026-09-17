@@ -53,7 +53,7 @@ try {
   check('English host and Turkish guest share a lobby', (await host.locator('#panel h1').innerText()) === 'Lobby' && (await guest.locator('#panel h1').innerText()) === 'Oda');
   check('player names remain untranslated on both clients', (await host.locator('.plist').innerText()).includes('Oyuncu') && (await guest.locator('.plist').innerText()).includes('Can'));
   check('guest has no start button and sees Turkish waiting notice', await guest.locator('#startBtn').count() === 0 && (await guest.locator('#hostWait').innerText()).includes('bekleniyor'));
-  check('guest map cards remain readable and disabled', await guest.locator('.mapbtn:disabled').count() === 11 && (await cardStyle(guest, '[data-map="forest"]')).opacity === selectedStyle.opacity);
+  check('guest map cards remain readable and disabled', await guest.locator('.mapbtn:disabled').count() === 13 && (await cardStyle(guest, '[data-map="forest"]')).opacity === selectedStyle.opacity);
   await guest.evaluate(() => {
     const n = __game.net;
     __game.hostStart();
@@ -68,7 +68,7 @@ try {
   check('host selection updates the guest selected card', await guest.locator('[data-map="dust2"]').getAttribute('aria-pressed') === 'true');
   await host.locator('[name="appearance"][value="notebook"]').check();
   await guest.locator('[name="appearance"][value="solid"]').check();
-  check('guest can choose a personal style while map choice stays locked', await guest.locator('.mapbtn:disabled').count() === 11 && await guest.locator('[name="appearance"][value="solid"]').isChecked());
+  check('guest can choose a personal style while map choice stays locked', await guest.locator('.mapbtn:disabled').count() === 13 && await guest.locator('[name="appearance"][value="solid"]').isChecked());
   if (process.env.QA_OUTPUT) {
     await host.screenshot({ path: resolve(process.env.QA_OUTPUT, 'online-maps-english.png') });
     await guest.screenshot({ path: resolve(process.env.QA_OUTPUT, 'online-lobby-turkish.png') });

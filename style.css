@@ -304,3 +304,23 @@ html[lang="tr"] .online .plist .host span:first-child::after { content: ' · oda
 .moderation .kill-target { margin-top: 12px; flex-wrap: wrap; }
 .moderation .kill-target input { width: 88px; height: auto; box-sizing: border-box; padding: 4px 8px; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--ink); border-radius: 4px; }
 .moderation .kill-target small { opacity: .7; }
+
+/* Team identity uses labels as well as color, in both visual styles. */
+[data-team="red"] { --team-color: #df344a; }
+[data-team="blue"] { --team-color: #326ade; }
+.team-rosters { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:16px 0; }
+.team-roster { border:2px solid var(--team-color); border-radius:8px; padding:12px; background:color-mix(in srgb,var(--team-color) 7%,transparent); }
+.team-roster h3 { margin:0 0 8px; color:var(--team-color); }
+.team-roster > div { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 0; }
+.team-roster select, .mode-rule select { font:inherit; border:1px solid currentColor; border-radius:5px; padding:6px; background:var(--paper,#fff9ed); color:var(--ink,#173751); }
+.mode-rule { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+.team-score { display:flex; align-items:center; gap:12px; }
+.team-score b { color:var(--team-color); display:grid; text-align:center; }
+.team-score strong { font-size:28px; }
+.player-name[data-team="red"], .player-name[data-team="blue"] { color:var(--team-color); border-color:var(--team-color); }
+#board h4[data-team] { color:var(--team-color); margin:10px 0 4px; }
+@media(max-width:620px){.team-rosters{grid-template-columns:1fr}.team-roster>div{flex-wrap:wrap}}
+
+.team-roster > div > span { min-width:0; flex:1; overflow-wrap:anywhere; text-align:left; }
+.team-roster select { flex-shrink:0; max-width:56%; font-size:16px; }
+.online .moderation button { color:var(--red); background:var(--paper); font-size:18px; padding:4px 12px; border:1px solid var(--red); }

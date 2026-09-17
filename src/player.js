@@ -125,7 +125,7 @@ export class Player {
   update(dt) {
     const ctx = this.ctx, inp = ctx.input, b = this.body;
     this.lastDamageT += dt;
-    this.ordnance.update(dt);
+    if (!ctx.controlsFrozen?.()) this.ordnance.update(dt);
     if (!this.alive) {
       this.deathT += dt; this.eyeH = damp(this.eyeH, 0.35, 3, dt); this.roll = damp(this.roll, 0.9, 3, dt); this.pitch = damp(this.pitch, -0.35, 3, dt);
       b.vel.x = damp(b.vel.x, 0, 4, dt); b.vel.z = damp(b.vel.z, 0, 4, dt); b.vel.y -= G * dt; ctx.world.moveBody(b, dt);
@@ -138,6 +138,9 @@ export class Player {
     this.yaw += inp.look.x * lookMul; this.pitch = clamp(this.pitch + inp.look.y * lookMul, -1.5, 1.5);
     this.forward.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
     _fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)); _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw)); this.right.copy(_right);
+    if (ctx.controlsFrozen?.()) {
+      b.vel.set(0,0,0); this.firing=false; this._updateCamera(dt); this.weapon.animate(dt,this._weaponState(false,false,0)); return;
+    }
     if (this.dashLock) {
       // the focus dash is sprinting the body across the level itself; don't fight it with gravity
       b.vel.set(0, 0, 0); b.onGround = false; this.coyote = 0.13;

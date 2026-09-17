@@ -30,12 +30,15 @@ export class HostCombat {
     now = () => performance.now() / 1000,
     sight = () => true,
     changed = () => {},
-    died = () => {}
+    died = () => {},
+    enabled = () => true,
+    friendly = () => false,
+    regenerate = () => true
   } = {}) {
     this.now = now;
     this.sight = sight;
     this.changed = changed;
-    this.died = died;
+    this.died = died; this.enabled = enabled; this.friendly = friendly; this.regenerate = regenerate;
     this.players = new Map();
     this.serial = 0;
     this.katana = true;
@@ -99,7 +102,7 @@ export class HostCombat {
     const pos = s.slice(0, 3),
       now = this.now();
     if (!vector(pos) || Math.abs(s[4]) > 1.6 || s.slice(8, 11).some(v => Math.abs(v) > 350)) return null;
-    if (p.hp > 0 && s[14] === p.life) {
+    if (p.hp > 0 && s[14] === p.life && this.enabled()) {
       // A generous envelope keeps normal grapple/dash latency from causing kicks.
       if (dist(pos, p.pos) > 12 + 150 * Math.min(1, now - p.lastSnap)) return null;
       p.pos = pos;
@@ -118,7 +121,7 @@ export class HostCombat {
     out[6] = s[6] & ~(64 | 4096 | 1024 | 2048) | (p.hp > 0 ? 64 : 0) | (now < p.protectedUntil ? 4096 : 0);
     if (!this.katana && out[5] === 3) out[5] = 0;
     if (!this.katana || out[5] !== 3) out[6] &= ~(4 | 256);
-    if (p.hp <= 0) {
+    if (p.hp <= 0 || !this.enabled()) {
       out[6] &= ~(32 | 128 | 4 | 256);
       out[8] = out[9] = out[10] = 0;
     }
@@ -150,6 +153,8 @@ export class HostCombat {
       reason
     });
     if (!a || !b || a === b || a.hp <= 0 || b.hp <= 0 || !spec || typeof d.id !== 'string' || d.id.length > 180 || !vector(d.point) || !vector(d.from)) return reject('invalid');
+    if (!this.enabled()) return reject('round');
+    if (this.friendly(from, b.id)) return reject('friendly');
     if (d.life !== b.life || d.attackerLife !== a.life) return reject('stale');
     if (a.seen.has(d.id)) return reject('duplicate');
     a.seen.add(d.id);
@@ -164,6 +169,18 @@ export class HostCombat {
     if (!hit) return reject('target');
     const distance = dist(d.from, d.point);
     if (distance > spec[3] || !this.sight(d.from, d.point)) return reject('cover');
+    // The reported impact must lie on the actual shot ray. Aim is sampled in the
+    // firing frame, not from a delayed pose: fast legitimate flicks remain valid.
+    // These client claims are consistency checks, not proof against a full aimbot.
+    if (d.src !== 'katana') {
+      if (!vector(d.aim) || !vector(d.ray) || Math.abs(Math.hypot(...d.aim)-1) > .015 || Math.abs(Math.hypot(...d.ray)-1) > .015) return reject('aim');
+      const dot = d.aim.reduce((sum,n,i)=>sum+n*d.ray[i],0);
+      // Includes hip-fire bloom, recoil and movement spread for all guns.
+      if (dot < .955) return reject('aim');
+      const offset = d.point.map((n,i)=>n-d.from[i]);
+      const along = offset.reduce((sum,n,i)=>sum+n*d.ray[i],0);
+      if (along < 0 || Math.hypot(...offset.map((n,i)=>n-along*d.ray[i])) > .18) return reject('ray');
+    }
     if (!this.allow(a, d.src, spec[2] / (spec[4] || 1), (spec[4] || 1) * 2)) return reject('rate');
     // A second global ceiling also limits cycling through weapons to bypass cadence.
     if (!this.allow(a, 'all', 1 / 40, 24)) return reject('rate');
@@ -195,6 +212,7 @@ export class HostCombat {
     };
   }
   damage(p, amount, killer = null, info = {}) {
+    if (!this.enabled() || (killer && this.friendly(killer, p?.id))) return 0;
     if (!p || p.hp <= 0 || !Number.isFinite(amount) || amount <= 0 || this.now() < p.protectedUntil) return 0;
     const actual = Math.min(p.hp, amount);
     p.hp -= actual;
@@ -226,11 +244,12 @@ export class HostCombat {
     const now = this.now(),
       dt = Math.min(1, now - this.lastTick);
     this.lastTick = now;
+    if (!this.enabled() || !this.regenerate()) return;
     for (const p of this.players.values()) if (p.hp > 0 && p.hp < COMBAT_RULES.hp && now - p.lastDamage > 4 && !(p.snap?.[6] & 128)) p.hp = Math.min(COMBAT_RULES.hp, p.hp + 14 * dt);
   }
   blast(owner, id, pos, kind) {
     const key = owner + ':' + id;
-    if (this.explosions.has(key) || !vector(pos)) return;
+    if (!this.players.has(owner) || this.explosions.has(key) || !vector(pos)) return;
     this.explosions.set(key, this.now());
     for (const [k, t] of this.explosions) if (this.now() - t > 30) this.explosions.delete(k);
     for (const p of this.players.values()) {

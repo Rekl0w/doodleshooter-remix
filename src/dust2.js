@@ -144,7 +144,10 @@ export function buildDust(B,H) {
   for(const[x,z]of [[553,650],[401,330],[430,161],[535,165],[858,89],[903,319],[716,526]])B.pickup(X(x),Math.round(dustHeight(x,z)/.12)*.12,Z(z));
   for(const[x,z]of [[903,100],[351,180],[898,457]])B.sniper(X(x),Math.round(dustHeight(x,z)/.12)*.12,Z(z));
   for(const[x,y,z]of [[570,12,632],[407,9,353],[351,11,208],[689,11,155],[885,12,295],[781,10,462]])B.ring(X(x),y,Z(z),'y');
-  L.playerStart.copy(L.arenaSpawns[0]);L.teamSpawns=[L.arenaSpawns.slice(0,3),L.arenaSpawns.slice(5,9)];
+  L.playerStart.copy(L.arenaSpawns[0]);L.teamSpawns=[[558,649],[692,170]].map(([cx,cz])=>Array.from({length:13},(_,i)=>{
+    const x=cx+(i%5-2)*12,z=cz+(Math.floor(i/5)-1)*12;
+    return new THREE.Vector3(X(x),Math.round(dustHeight(x,z)/.12)*.12+.04,Z(z));
+  }));
   L.callouts={tSpawn:[558,649],outsideTunnels:[390,476],upperTunnels:[390,325],lowerTunnels:[544,287],bSite:[414,90],bDoors:[464,161],bWindow:[464,106],midDoors:[612,263],mid:[611,430],catwalk:[647,363],short:[737,232],ctSpawn:[692,158],aSite:[858,105],long:[900,310],pit:[900,448],longDoors:[779,432],outsideLong:[728,521]};
   for(const[k,[x,z]]of Object.entries(L.callouts))L.callouts[k]=new THREE.Vector3(X(x),Math.round(dustHeight(x,z)/.12)*.12,Z(z));
   // Invisible, non-grapple perimeter prevents falling off the finite mesh.

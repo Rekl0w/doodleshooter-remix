@@ -1,9 +1,12 @@
+import { buildTeamMap } from './team-maps.js';
 import { ui } from './i18n.js';
 import * as THREE from 'three';
 import { INK } from './render.js';
 import { buildWilderness, buildDust, buildSkyline } from './expansion-maps.js';
 
 export const NEW_MAPS = [
+  { key: 'foundry', name: ui('Foundry'), blurb: ui('Team arena · Machine halls · Three routes'), style: 'harbor' },
+  { key: 'quarter', name: ui('Old Quarter'), blurb: ui('Team arena · Courtyards · Covered alleys'), style: 'canyon' },
   { key: 'harbor', name: ui("Container Harbor"), blurb: ui("Tight lanes · Cranes · Close combat"), style: 'harbor' },
   { key: 'canyon', name: ui("Paper Canyon"), blurb: ui("Open ground · Terraces · Long range"), style: 'canyon' },
   { key: 'gardens', name: ui("Rooftop Gardens"), blurb: ui("High bridges · Parks · Grappling"), style: 'gardens' },
@@ -220,5 +223,5 @@ export function buildMeadow(B) {
 }
 
 const helpers = { perimeter, finish };
-export const MAP_BUILDERS = { harbor: buildHarbor, canyon: buildCanyon, gardens: buildGardens, forest: buildForest, duel: buildDuel, meadow: buildMeadow,
+export const MAP_BUILDERS = { foundry: B => buildTeamMap(B, helpers, 'foundry'), quarter: B => buildTeamMap(B, helpers, 'quarter'), harbor: buildHarbor, canyon: buildCanyon, gardens: buildGardens, forest: buildForest, duel: buildDuel, meadow: buildMeadow,
   deepforest: B => buildWilderness(B, helpers), lostwoods: B => buildWilderness(B, helpers, true), dust2: B => buildDust(B, helpers), skyline: B => buildSkyline(B, helpers) };

@@ -10,14 +10,14 @@ const check = (name, ok) => { assert.ok(ok, name); count++; console.log('PASS ' 
 try {
   await page.goto(process.env.GAME_URL || 'http://127.0.0.1:8911');
   await page.waitForFunction(() => !!window.__game, null, {timeout: 60000});
-  check('eleven distinct selectable maps', await page.locator('.mapbtn').count() === 11);
+  check('thirteen distinct selectable maps', await page.locator('.mapbtn').count() === 13);
   const fixtures = await page.evaluate(async () => {
     const THREE = await import('/vendor/three/three.module.js');
     const { World, makeBody } = await import('/src/physics.js');
     const { buildLevel } = await import('/src/level.js');
     const { NavGrid } = await import('/src/nav.js');
     const out = [], test = (name, pass, detail) => out.push({ name, pass, detail });
-    for (const key of ['harbor', 'canyon', 'gardens', 'forest', 'duel', 'meadow', 'deepforest', 'lostwoods', 'dust2', 'skyline']) {
+    for (const key of ['foundry', 'quarter', 'harbor', 'canyon', 'gardens', 'forest', 'duel', 'meadow', 'deepforest', 'lostwoods', 'dust2', 'skyline']) {
       const world = new World(), scene = new THREE.Scene(), L = buildLevel(scene, world, key), nav = new NavGrid(world, L.bounds, L.navCell || 1).build();
       const valid = p => {
         const b = makeBody(p, .45, 2, .55);
@@ -53,7 +53,7 @@ try {
     return out;
   });
   for (const f of fixtures) check(f.name + (f.pass ? '' : ' ' + JSON.stringify(f.detail)), f.pass);
-  for (const key of ['harbor', 'canyon', 'gardens', 'forest', 'duel', 'meadow', 'deepforest', 'lostwoods', 'dust2', 'skyline', 'district']) {
+  for (const key of ['foundry', 'quarter', 'harbor', 'canyon', 'gardens', 'forest', 'duel', 'meadow', 'deepforest', 'lostwoods', 'dust2', 'skyline', 'district']) {
     await page.locator(`[data-map="${key}"]`).click();
     check(key + ': choosing a map keeps menu open', await page.evaluate(key => __game.game.state === 'start' && document.querySelector(`[data-map="${key}"]`).getAttribute('aria-pressed') === 'true', key));
     await page.locator('#soloBtn').click();

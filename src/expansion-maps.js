@@ -75,7 +75,7 @@ export { buildDust } from './dust2.js';
 
 export function buildSkyline(B,H) {
   H.perimeter(B,'skyline',INK.BLUE,94); B.L.chunkSize=32; B.L.skyHeight=54;
-  const rng=random(9817); let buildings=0;
+  const rng=random(9817), roofSpawns=[]; let buildings=0;
   for(const x of [-60,-30,0,30,60]) for(const z of [-60,-30,0,30,60]) {
     if(x===0&&z===0) continue;
     const h=22+Math.floor(rng()*8)*4, ink=(buildings++%3===0)?INK.ORANGE:INK.BLUE;
@@ -84,6 +84,8 @@ export function buildSkyline(B,H) {
       for(const side of [-1,1]) { B.box(x+d,y,z+side*9.04,1.3,1.8,.035,{ink:INK.GREEN,noCollide:true}); B.box(x+side*9.04,y,z+d,.035,1.8,1.3,{ink:INK.GREEN,noCollide:true}); }
     }
     B.box(x+3,h+.6,z+3,3,1.8,3,{ink:INK.BLACK});
+    // Stay clear of the rooftop utility box and at least six metres from edges.
+    roofSpawns.push(new THREE.Vector3(x-3,h+.64,z-3));
     for(const y of [11,21,h+3]) B.ring(x, y, z+10, 'z');
     B.ring(x+10,h*.6,z,'x');
   }
@@ -102,6 +104,7 @@ export function buildSkyline(B,H) {
   }
   B.L.spawns=[]; B.L.arenaSpawns=[];
   for(const [x,z] of [[15,80],[-80,0],[80,0],[0,-80],[-45,-45],[45,-45],[-45,45],[45,45],[-15,15],[15,-15]]) { B.spawn(x,0,z); B.L.arenaSpawns.push(new THREE.Vector3(x,0,z)); }
+  B.L.roofSpawns=roofSpawns; B.L.arenaSpawns.push(...roofSpawns);
   // Replace generic supplies that can intersect the outer building row.
   B.L.pickups=B.L.pickups.filter(p=>Math.abs(p.x)>70); B.pickup(0,0,0); B.pickup(0,0,78); B.pickup(0,0,-78);
   B.L.playerStart.set(15,0,80); B.ring(15,12,76,'y'); B.L.assetCounts={buildings};

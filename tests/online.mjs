@@ -55,7 +55,7 @@ try {
   const hp = await guest.evaluate(() => __game.player.hp);
   check('AK-47 ray hits the remote player', await host.evaluate(() => {
     const g = __game, target = [...g.remote.values()][0]; g.player.switchTo(6);
-    return g.player.weapon.fireRay(g.player.eye, target.center.clone().sub(g.player.eye).normalize());
+    return g.player.weapon.fireRay(g.player.eye, g.player.forward.copy(target.center.clone().sub(g.player.eye).normalize()));
   }));
   await guest.waitForFunction(hp => __game.player.hp < hp, hp);
   check('AK-47 PvP damage arrives over WebRTC', await guest.evaluate(hp => hp - __game.player.hp > 0 && hp - __game.player.hp <= 44, hp));

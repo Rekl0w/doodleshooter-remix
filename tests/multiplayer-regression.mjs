@@ -27,10 +27,20 @@ try {
  await host.evaluate(()=>{const g=__game;window.wall=g.world.addBox({x:-2,y:0,z:14},{x:2,y:5,z:16});g.world.finalize();});
  await host.waitForTimeout(100);check('names hidden behind cover',!await host.locator('.player-name').filter({hasText:'Can <3'}).isVisible());
  await host.evaluate(()=>{__game.world.removeBox(window.wall);});await host.waitForTimeout(100);
+ // Real guest packets with inconsistent aim or fabricated impact rays must be rejected.
+ const hostId=await host.evaluate(()=>__game.net.id);
+ await guest.evaluate(id=>{const g=__game,n=g.net,original=n.handlers.get('combat-result');window.aimRejections=[];n.on('combat-result',(d,from)=>{if(d.id?.startsWith('aim-check-'))aimRejections.push(d.reason);original(d,from);});
+  const t=g.remote.get(id),ray=t.center.clone().sub(g.player.eye).normalize();
+  const d={target:id,life:t.lifeId,attackerLife:g.player.lifeId,src:'rifle',from:g.player.eye.toArray(),point:t.center.toArray(),part:'torso'};
+  n.send('combat-hit',{...d,id:'aim-check-direction',aim:[1,0,0],ray:ray.toArray()});
+  n.send('combat-hit',{...d,id:'aim-check-impact',aim:ray.toArray(),ray:ray.clone().add({x:.08,y:0,z:0}).normalize().toArray()});
+ },hostId);
+ await guest.waitForFunction(()=>window.aimRejections.length===2);
+ check('host rejects inconsistent guest aim and off-ray impacts over WebRTC',await guest.evaluate(()=>aimRejections.includes('aim')&&aimRejections.includes('ray'))&&await host.evaluate(()=>__game.player.hp===110));
  // Feedback spy counts actual HUD calls, while the real rendering remains active.
  for(const p of pages)await p.evaluate(()=>{window.hitCalls=[];const h=__game.hud,original=h.hitmarker.bind(h);h.hitmarker=(...args)=>{hitCalls.push(args);original(...args);};});
  await host.evaluate(()=>{const n=__game.net;window.damageHandler=n.handlers.get('combat-hit');n.on('combat-hit',(d,f)=>setTimeout(()=>damageHandler(d,f),350));});
- const shot=async(p,id)=>p.evaluate(id=>{const g=__game,t=g.remote.get(id);g.player.switchTo(6);return g.player.weapon.fireRay(g.player.eye,t.center.clone().sub(g.player.eye).normalize());},id);
+ const shot=async(p,id)=>p.evaluate(id=>{const g=__game,t=g.remote.get(id);g.player.switchTo(6);return g.player.weapon.fireRay(g.player.eye,g.player.forward.copy(t.center.clone().sub(g.player.eye).normalize()));},id);
  const hp=await guest.evaluate(()=>__game.player.hp);
  check('ray hits opponent geometry',await shot(host,guestId));
  check('no speculative X before damage arrives',await host.evaluate(()=>hitCalls.length===0));
@@ -73,7 +83,7 @@ try {
  await host.locator('.player-name').filter({hasText:'Can <3'}).waitFor({state:'hidden'});check('dead player name is hidden',true);await ready(guest);await guest.locator('#respawnBtn').click();await waitAlive(guest);
  // Receiving a lethal online shot while the pause panel is already open.
  await place(host,0,20);await place(guest,0,10);await host.waitForTimeout(400);await guest.keyboard.press('Escape');await guest.waitForFunction(()=>__game.game.menu);
- await host.evaluate(id=>{const g=__game,t=g.remote.get(id);g.player.switchTo(2);g.player.weapon.fireRay(g.player.eye,t.center.clone().sub(g.player.eye).normalize());},guestId);
+ await host.evaluate(id=>{const g=__game,t=g.remote.get(id);g.player.switchTo(2);g.player.weapon.fireRay(g.player.eye,g.player.forward.copy(t.center.clone().sub(g.player.eye).normalize()));},guestId);
  await guest.waitForFunction(()=>!__game.player.alive);await host.waitForFunction(()=>hitCalls.some(args=>args[0]===true));check('lethal network hit confirms a kill while victim is in menu',true);
  await guest.waitForFunction(()=>__game.game.respawnT===0);await guest.locator('.go').click();await waitAlive(guest);check('one resume click recovers after dying inside menu',true);
  // Reserved browser close shortcuts use the native leave confirmation.
