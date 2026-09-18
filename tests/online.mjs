@@ -47,9 +47,25 @@ try {
   const earlyGuestId = await guest.evaluate(() => __game.net.id);
   await guest.waitForFunction(() => __game.sceneClock.samples.length >= 2, null, { timeout: 15000 });
   check('both clients have the same 12 weapon slots', await guest.evaluate(() => __game.player.weapons.length === 12));
+  const minePos = await host.evaluate(() => __game.player.ordnance.mines[0].pos.toArray());
+  // Put the late guest behind a deterministic cover piece before requesting
+  // the sync. The original random spawn sometimes had a clear view, making a
+  // visibility-redaction assertion depend on the shuffled forest spawn.
+  await host.evaluate(({ id, pos }) => {
+    const g = __game;
+    g._mineVisibilityWall = g.world.addBox({ x: pos[0] - 3, y: 0, z: pos[2] + 4 }, { x: pos[0] + 3, y: 3, z: pos[2] + 5 });
+    g.world.finalize();
+    const p = g.combat.players.get(id); p.pos = [pos[0], pos[1], pos[2] + 10]; p.history = []; p.lastSnap = performance.now() / 1000; p.movementGraceUntil = performance.now() / 1000 + 1.2;
+  }, { id: earlyGuestId, pos: minePos });
+  await guest.evaluate(pos => {
+    const g = __game;
+    for (const m of g.player.ordnance.remoteMines.values()) g.scene.remove(m.mesh);
+    g.player.ordnance.remoteMines.clear();
+    g.player.body.pos.set(pos[0], pos[1], pos[2] + 10); g.player.body.vel.set(0, 0, 0); g.input.keys = {};
+  }, minePos);
   await guest.waitForTimeout(450);
   check('late join does not receive hidden mine positions', await guest.evaluate(() => __game.player.ordnance.remoteMines.size === 0));
-  const minePos = await host.evaluate(() => __game.player.ordnance.mines[0].pos.toArray());
+  await host.evaluate(() => { const g = __game; if (g._mineVisibilityWall) { g.world.removeBox(g._mineVisibilityWall); g._mineVisibilityWall = null; } });
   await host.evaluate(({ id, pos }) => {
     const g=__game,p=g.combat.players.get(id); p.pos=[pos[0],pos[1],pos[2]+1]; p.lastSnap=performance.now()/1000; p.movementGraceUntil=performance.now()/1000+1.2;
   }, { id: earlyGuestId, pos: minePos });

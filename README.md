@@ -162,12 +162,13 @@ node tests/ui.mjs
 node tests/appearance.mjs
 node tests/online.mjs
 node tests/multiplayer-regression.mjs
+node tests/false-positive-movement.mjs
 node tests/production-debug.mjs
 ```
 
 On Windows, tests use installed Microsoft Edge. Set `GAME_URL` to use another server, or `PLAYWRIGHT_MODULE` to point to an existing Playwright installation. UI and online tests create private rooms and require internet access. Run browser suites sequentially.
 
-Coverage includes movement, ammo, damage, map loading, safe spawns, bot paths, scopes, dual pistols, Dust traversal and boundaries, English/Turkish persistence, lobby card styles, host-only match starts, real two-client WebRTC synchronization, recipient-specific wall visibility and mine redaction/restoration, three-client respawn / hit-acknowledgement / nameplate regressions, forged velocity and weapon-ledger checks, deterministic anti-cheat strikes, smooth head-tracking detection, weapon cadence and health authority, behavioral scoring/decay, automatic kick and room-ban enforcement, post-kick packet rejection, and production debug-surface removal.
+Coverage includes movement, ammo, damage, map loading, safe spawns, bot paths, scopes, dual pistols, Dust traversal and boundaries, English/Turkish persistence, lobby card styles, host-only match starts, real two-client WebRTC synchronization, recipient-specific wall visibility and mine redaction/restoration, three-client respawn / hit-acknowledgement / nameplate regressions, a repeatable 30-second forest movement route at a map boundary, forged velocity and weapon-ledger checks, deterministic anti-cheat strikes, smooth head-tracking detection, weapon cadence and health authority, behavioral scoring/decay, automatic kick and room-ban enforcement, post-kick packet rejection, and production debug-surface removal.
 
 ## Technology and contributions
 

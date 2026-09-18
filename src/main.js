@@ -347,15 +347,19 @@ const relayShotVisual = (from, data) => {
 };
 // A movement envelope alone still permits a cheater to walk straight through
 // a wall at a plausible speed. The host has the authoritative collision world,
-// so reject destinations inside geometry and short straight-line crossings.
+// so reject destinations that are deeply inside geometry and long crossings.
+// The body is intentionally a little smaller than the local collision body:
+// snapshots are quantized to centimetres, and treating a wall contact at a
+// rounded edge as a hard violation would ban ordinary players while sliding
+// along cover.
 const snapshotPathViolation = (p, d) => {
  if (!d.every(Number.isFinite)) return null;
  const pos = new THREE.Vector3(d[0], d[1], d[2]);
  const crouched = !!(d[6] & 1);
- const body = { pos, halfW: .36, height: crouched ? 1.1 : 1.8 };
+ const body = { pos, halfW: .32, height: crouched ? 0.98 : 1.68 };
  if (world.overlapsBody(body)) return 'inside-collider';
  const previous = new THREE.Vector3(...p.pos), distance = previous.distanceTo(pos);
- if (distance < .18 || distance > 6) return null;
+ if (distance < .45 || distance > 6) return null;
  const from = previous.clone(); from.y += crouched ? .55 : .9;
  const to = pos.clone(); to.y += crouched ? .55 : .9;
  return world.hasLineOfSight(from, to) ? null : 'through-collider';
