@@ -268,9 +268,12 @@ export class Net {
     else { const c = this.conns.get(this.hostId); if (c && c.open) c.send({ t: type, d: data, relay }); }
   }
   broadcast(type, data) { this.send(type, data, true); }
-  sendTo(pid, type, data) {
+  // `from` is normally the host for host-originated messages. Snapshot
+  // redaction uses the same transport but preserves the player whose body is
+  // being relayed, so the receiving client can update the right RemotePlayer.
+  sendTo(pid, type, data, from = this.id) {
     this.stats.sent++;
-    if (this.isHost) { const c = this.conns.get(pid); if (c && c.open) c.send({ t: type, d: data, from: this.id }); }
+    if (this.isHost) { const c = this.conns.get(pid); if (c && c.open) c.send({ t: type, d: data, from }); }
     else { const c = this.conns.get(this.hostId); if (c && c.open) c.send({ t: type, d: data, to: pid, from: this.id }); }
   }
 }

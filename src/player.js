@@ -72,6 +72,7 @@ export class Player {
     if (this.weapon.kind !== 'katana') this.prevWeaponIndex = this.weaponIndex;
     this.weapon.unequip(); this.weaponIndex = i; this.weapon = this.weapons[i]; this.weapon.equip(); if (!silent) audio.switchWeapon();
     this.ctx.hud.setWeapon(this.weapon.name, this.weapon.hint); this.ctx.hud.setCrosshairMode(this.weapon.kind === 'katana' ? 'katana' : '');
+    this.ctx.onWeaponSwitch?.(i);
   }
   weaponAllowed(i) { return !(this.ctx.game.mode === 'ffa' && this.ctx.game.katanaAllowed === false && i === this.katanaIndex); }
   cycleWeapon(step) { let i = this.weaponIndex; do { i = (i + step + this.weapons.length) % this.weapons.length; } while (!this.weaponAllowed(i)); this.switchTo(i); }

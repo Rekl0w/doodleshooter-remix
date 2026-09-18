@@ -17,7 +17,7 @@ import { Player } from './player.js';
 import { RemotePlayer, encodeLocal } from './players.js';
 import { Net } from './net.js';
 import { HUD, CONTROLS_HTML } from './hud.js';
-import { HostCombat, vector } from './host-combat.js';
+import { HostCombat, movementLimit, vector } from './host-combat.js';
 import { AntiCheat } from './anti-cheat.js';
 import { Nameplates } from './nameplates.js';
 import { audio } from './audio.js';
@@ -114,7 +114,13 @@ const combat = new HostCombat({
  enabled: roundLive, friendly, regenerate: () => !roundMode(),
  sight: (a,b) => world.hasLineOfSight(new THREE.Vector3(...a), new THREE.Vector3(...b), box => box.data.noShoot === true),
  changed: v => publishVitals(v),
- died: d => { net.send('combat-death', d); combatDeath(d); tallyDeath(d.victim, d.killer); }
+ died: d => {
+  // The impact origin is useful to the victim's local damage UI, but it is
+  // unnecessary for a death feed and would leak the shooter's position to
+  // every other guest.
+  const { from: _impactOrigin, ...publicDeath } = d;
+  net.send('combat-death', publicDeath); combatDeath(publicDeath); tallyDeath(d.victim, d.killer);
+ }
 });
 function kickForCheating(id, info = {}) {
   if (!net.isHost || id === net.id) return false;
@@ -150,24 +156,67 @@ function applyVitals(v) {
  player.hp=v.hp;
  if(v.hp<=0) {if(player.alive)player.die();player.alive=false;game.respawnT=v.wait;game.respawnAt=performance.now()+v.wait*1000;}
 }
-function publishVitals(v) { applyVitals(v); net.send('combat-state', v); }
+// Combat-state packets still need to tell peers about health, life and spawn
+// protection, but a guest must not receive everybody's exact spawn position
+// through this side channel. Position is reserved for the owner; all other
+// recipients get a deliberately inert coordinate and no last-hit origin.
+const vitalsFor = (v, viewerId) => v?.id === viewerId ? v : { ...v, pos: [0, -100, 0], spawn: false, lastHit: null };
+const viewsFor = viewerId => [...combat.players.values()].map(p => vitalsFor(combat.view(p, true), viewerId));
+function publishVitals(v) {
+ applyVitals(v);
+ if (!net.isHost) { net.send('combat-state', v); return; }
+ for (const pid of net.conns.keys()) net.sendTo(pid, 'combat-state', vitalsFor(v, pid));
+}
 function combatRequest(type,d) { if(!net.active||!online())return;if(net.isHost)net._emit(type,d,net.id);else net.send(type,d); }
+ctx.onWeaponSwitch = index => {
+ if (!net.active || !online() || !Number.isInteger(index)) return;
+ if (net.isHost) {
+  const p = combat.players.get(net.id); if (p?.snap) p.snap[5] = index;
+ } else net.send('weapon-select', { weapon: index });
+};
 net.on('combat-state',(v,from)=>{if(from===net.hostId)applyVitals(v);});
 net.on('combat-hit',(d,from)=>{
  if(!net.isHost||!online()||!inMatch()||game.over)return;
+ // The host's local weapon switch is already in memory; mirror it into the
+ // ledger before a same-frame shot, while guests must wait for a sanitized ps
+ // snapshot and therefore cannot spoof a different weapon in combat-hit.
+ if (from === net.id) {
+  const local = combat.players.get(from), index = WEAPON_ORDER.indexOf(d?.src);
+  if (local?.snap && index >= 0) local.snap[5] = index;
+ }
+ const rayConsistent = (() => {
+  if (d?.src === 'katana' || !vector(d?.aim) || !vector(d?.ray) || !vector(d?.from) || !vector(d?.point)) return false;
+  const aimLength = Math.hypot(...d.aim), rayLength = Math.hypot(...d.ray);
+  if (Math.abs(aimLength - 1) > .015 || Math.abs(rayLength - 1) > .015) return false;
+  const alignment = d.aim.reduce((sum, n, i) => sum + n * d.ray[i], 0);
+  const offset = d.point.map((n, i) => n - d.from[i]), along = offset.reduce((sum, n, i) => sum + n * d.ray[i], 0);
+  return alignment >= .955 && along >= 0 && Math.hypot(...offset.map((n, i) => n - along * d.ray[i])) <= .18;
+ })();
+ if (from !== net.id && rayConsistent && !antiCheat.shotRayAllowed(from, d?.ray)) {
+  // The shot is blocked immediately; keep the first impossible ray as low
+  // severity evidence so it does not combine with unrelated life packets to
+  // remove an otherwise legitimate player.
+  antiCheat.recordProtocolViolation(from, 'silent-aim', 'low', { reason: 'outside-recent-view' });
+  const rejected = { id: d?.id, amount: 0, reason: 'silent-aim', target: d?.target };
+  net.sendTo(from, 'combat-result', rejected);
+  return;
+ }
  const result={...combat.hit(from,d),target:d?.target};
  if (from !== net.id && combat.players.get(from)?.hp > 0) {
   const target = combat.players.get(d?.target); antiCheat.recordHitResult(from, result, {
    targetId: d?.target,
    targetPosition: target?.pos,
-   targetHeight: (target?.snap?.[6] & 1) ? .6 : 1,
+   targetHeight: (target?.snap?.[6] & 1) ? 1.45 : 1.75,
    point: d?.point,
    ray: d?.ray,
    part: d?.part,
    immediate: result.reason === 'rate'
   });
-  const deterministic = { invalid: 'invalid-combat', duplicate: 'replay-hit', origin: 'impossible-origin', stale: 'forged-life', rate: 'weapon-cadence' }[result.reason];
-  if (deterministic) antiCheat.recordProtocolViolation(from, deterministic, result.reason === 'invalid' || result.reason === 'origin' ? 'hard' : 'medium', { weapon: d?.src });
+  const deterministic = { invalid: 'invalid-combat', duplicate: 'replay-hit', origin: 'impossible-origin', stale: 'forged-life', rate: 'weapon-cadence', 'weapon-state': 'forged-weapon-state', cover: 'blocked-shot', target: 'invalid-impact', friendly: 'friendly-fire' }[result.reason];
+  if (deterministic) {
+   const severity = result.reason === 'cover' || result.reason === 'friendly' ? 'low' : result.reason === 'invalid' || result.reason === 'origin' ? 'hard' : 'medium';
+   antiCheat.recordProtocolViolation(from, deterministic, severity, { weapon: d?.src });
+  }
  }
  if(from===net.id)acceptHitResult(result);else net.sendTo(from,'combat-result',result);
 });
@@ -229,13 +278,73 @@ function tickHostMines() {
 }
 const antiReject = (from, kind, details = {}, severity = 'hard') => { if (net.isHost && from !== net.id) antiCheat.recordProtocolViolation(from, kind, severity, details); return null; };
 net.onProtocolViolation = (from, kind, details) => { if (net.isHost && from !== net.id) antiCheat.recordProtocolViolation(from, kind, kind === 'protocol-bypass' ? 'low' : 'hard', details); };
+
+// A peer-to-peer browser cannot hide the map or its own source from a curious
+// client, but it can avoid handing every peer the exact position of everyone
+// else. The host checks line of sight per recipient and sends an away snapshot
+// while a player is behind solid cover. This removes the useful wallhack data
+// (position, aim, weapon, velocity and hook point) without affecting the
+// authoritative host combat checks.
+const hiddenSnapshot = snap => {
+  const out = [...snap];
+  out.splice(0, 3, 0, -100, 0);
+  out[3] = out[4] = out[5] = 0;
+  out[6] = (snap[6] & 64) | 2048;
+  out[7] = 0;
+  out[8] = out[9] = out[10] = out[11] = out[12] = out[13] = 0;
+  return out;
+};
+const visibleSnapshotFor = (from, snap, viewerId) => {
+  if (viewerId === from) return null;
+  const source = combat.players.get(from), viewer = combat.players.get(viewerId);
+  if (!source || !viewer || source.hp <= 0 || viewer.hp <= 0) return hiddenSnapshot(snap);
+  const viewerCrouched = !!(viewer.snap?.[6] & 1);
+  const sourceCrouched = !!(snap[6] & 1);
+  const eye = new THREE.Vector3(viewer.pos[0], viewer.pos[1] + (viewerCrouched ? .88 : 1.6), viewer.pos[2]);
+  const center = new THREE.Vector3(snap[0], snap[1] + (sourceCrouched ? .6 : 1), snap[2]);
+  const head = new THREE.Vector3(snap[0], snap[1] + (sourceCrouched ? .95 : 1.55), snap[2]);
+  const visible = world.hasLineOfSight(eye, center) || world.hasLineOfSight(eye, head);
+  return visible ? snap : hiddenSnapshot(snap);
+};
+const relayPlayerSnapshot = (from, snap) => {
+ if (!net.isHost) { net.send('ps', snap, true); return; }
+ for (const pid of net.conns.keys()) {
+  const view = visibleSnapshotFor(from, snap, pid);
+  if (view) net.sendTo(pid, 'ps', view, from);
+ }
+};
+const relayShotVisual = (from, data) => {
+ if (!net.isHost) { net.send('shots', data, true); return; }
+ const source = combat.players.get(from);
+ if (!source?.snap) return;
+ for (const pid of net.conns.keys()) {
+  const view = visibleSnapshotFor(from, source.snap, pid);
+  if (view && !(view[6] & 2048)) net.sendTo(pid, 'shots', data, from);
+ }
+ if (from !== net.id) {
+  const view = visibleSnapshotFor(from, source.snap, net.id);
+  if (view && !(view[6] & 2048)) net._emit('shots', data, from);
+ }
+};
 net.onIngress=(msg,from)=>{
  const d=msg.d,p=combat.players.get(from);
- if(!roundLive() && !['ps','scene-ping','mine-sync','team-select'].includes(msg.t))return antiReject(from,'out-of-phase-packet',{type:msg.t},'medium');
- if(!['team-select','ps','nade','ordnance','shots','brk','mine-sync','take','scene-ping','combat-hit','combat-respawn','combat-fall','combat-cut'].includes(msg.t))return antiReject(from,'unknown-combat-packet',{type:msg.t},'hard');
+ if(!roundLive() && !['ps','scene-ping','mine-sync','team-select','weapon-select'].includes(msg.t))return antiReject(from,'out-of-phase-packet',{type:msg.t},'medium');
+ if(!['team-select','weapon-select','ps','nade','ordnance','shots','brk','mine-sync','take','scene-ping','combat-hit','combat-respawn','combat-fall','combat-cut'].includes(msg.t))return antiReject(from,'unknown-combat-packet',{type:msg.t},'hard');
  if(['team-select','mine-sync','take','scene-ping'].includes(msg.t))return {...msg,relay:false,to:undefined};
+ if(msg.t==='weapon-select') {
+  // A dead spectator can still have one reliable switch packet in flight
+  // while a team round or the lobby is changing. It has no combat effect, so
+  // discard it without turning a transport race into anti-cheat evidence.
+  if (p?.hp <= 0) return null;
+  if(!p || !Number.isInteger(d?.weapon) || d.weapon<0 || d.weapon>=WEAPON_ORDER.length) return antiReject(from,'invalid-weapon-select',{weapon:d?.weapon});
+  if(!lobby.katana && d.weapon===3) return antiReject(from,'katana-disabled',{},'hard');
+  p.snap = p.snap || [...p.pos,0,0,0,64,p.hp,0,0,0,0,0,0,0,p.life]; p.snap[5] = d.weapon;
+  return null;
+ }
  if(msg.t==='ps') {
-  if(!inMatch())return antiReject(from,'snapshot-outside-match',{},'medium');
+  // Reliable WebRTC can deliver the final snapshot after a round has ended;
+  // it is stale state with no authority effect, not a cheat signal.
+  if(!inMatch())return null;
   if(!p || !Array.isArray(d) || d.length !== 15) return antiReject(from,'malformed-snapshot',{length:Array.isArray(d)?d.length:null});
   // Dead clients may keep rendering stale local state while waiting to
   // respawn. Ignore those snapshots quietly; forged life ids from a living
@@ -244,16 +353,23 @@ net.onIngress=(msg,from)=>{
   const now = performance.now() / 1000;
   if (d[14] !== p.life) { if (now <= (p.spawnGraceUntil || 0)) return null; return antiReject(from,'forged-life',{expected:p.life,received:d[14]}); }
   if (!Number.isInteger(d[5]) || d[5] < 0 || d[5] >= WEAPON_ORDER.length) return antiReject(from,'invalid-weapon',{weapon:d[5]});
-  const moved = vector(d.slice(0,3)) ? Math.hypot(d[0]-p.pos[0],d[1]-p.pos[1],d[2]-p.pos[2]) : Infinity, dt = Math.max(.001, now - p.lastSnap), maxDistance = 12 + 150 * Math.min(1, dt);
-  if (p.hp > 0 && now > (p.movementGraceUntil || 0) && moved > maxDistance) antiCheat.recordMovementViolation(from,{distance:moved,maxDistance,dt,reason:'impossible-snapshot'});
+  if (Number.isInteger(p.snap?.[5]) && d[5] !== p.snap[5]) {
+   antiCheat.recordProtocolViolation(from, 'forged-weapon-state', 'medium', { expected: p.snap[5], received: d[5] });
+  }
+  const moved = vector(d.slice(0,3)) ? Math.hypot(d[0]-p.pos[0],d[1]-p.pos[1],d[2]-p.pos[2]) : Infinity, dt = Math.max(.001, now - p.lastSnap), maxDistance = movementLimit(dt);
+  if (p.hp > 0 && now > (p.movementGraceUntil || 0) && (moved > maxDistance || moved / dt > 75)) antiCheat.recordMovementViolation(from,{distance:moved,maxDistance,dt,reason:moved / dt > 75 ? 'impossible-speed' : 'impossible-snapshot'});
   const snap=combat.snapshot(from,d);
   if(!snap){if(p)net.sendTo(from,'combat-state',{...combat.view(p),correction:true});return null;}
-  antiCheat.recordSnapshot(from,{at:now,position:snap.slice(0,3),yaw:snap[3],pitch:snap[4],targets:[...combat.players.values()].filter(t=>t.id!==from&&t.hp>0).map(t=>({id:t.id,position:t.pos,height:(t.snap?.[6]&1)?.6:1}))});
-  return {...msg,d:snap,relay:true,to:undefined};
+  antiCheat.recordSnapshot(from,{at:now,position:snap.slice(0,3),yaw:snap[3],pitch:snap[4],targets:[...combat.players.values()].filter(t=>t.id!==from&&t.hp>0).map(t=>({id:t.id,position:t.pos,height:(t.snap?.[6]&1)?1.45:1.75}))});
+  relayPlayerSnapshot(from, snap);
+  return {...msg,d:snap,relay:false,to:undefined};
  }
  if(msg.t==='nade'){if(!allowGrenade(d,from))return null;return {...msg,d:{id:d.id,pos:d.pos,vel:d.vel},relay:true,to:undefined};}
  if(msg.t==='ordnance'){if(!allowMine(d,from))return null;return {...msg,d:{op:d.op,id:d.id,pos:d.pos,map:d.map},relay:true,to:undefined};}
- if(msg.t==='shots'&&(!p||p.hp<=0||!Array.isArray(d.e)||d.e.length>120||d.e.length%3!==0||!d.e.every(n=>Number.isFinite(n)&&Math.abs(n)<=2000)||!WEAPON_ORDER.includes(d.k)))return antiReject(from,'invalid-shot',{weapon:d?.k});
+ if(msg.t==='shots') {
+  if(!p||p.hp<=0||!Array.isArray(d.e)||d.e.length>120||d.e.length%3!==0||!d.e.every(n=>Number.isFinite(n)&&Math.abs(n)<=2000)||!WEAPON_ORDER.includes(d.k))return antiReject(from,'invalid-shot',{weapon:d?.k});
+  relayShotVisual(from, { k: d.k, e: d.e }); return null;
+ }
  if(['cut','parry'].includes(msg.t))return antiReject(from,'protocol-bypass',{type:msg.t}); // Never accept unverified client knockbacks/rope cuts.
  if(msg.t==='brk'&&(!p||p.hp<=0||!Number.isInteger(d.id)||!level.breakables[d.id]||new THREE.Vector3(...p.pos).distanceTo(level.breakables[d.id].pos)>600||!world.hasLineOfSight(new THREE.Vector3(...p.pos).add(new THREE.Vector3(0,1.6,0)),level.breakables[d.id].pos,box=>box===level.breakables[d.id].box)||!combat.allow(p,'break',.08,4)))return antiReject(from,'invalid-breakable',{id:d?.id},'medium');
  if(msg.t==='fell')return antiReject(from,'unverified-fall',{},'medium');
@@ -374,7 +490,9 @@ function hostTeamRound(){
  hostMines.clear();approvedGrenades.clear();combat.clear(lobby.katana);
  for(const[id,pos]of Object.entries(positions))combat.add(id,pos);
  const d={state:teamMatch.view(),players:lobbyRows(),map:lobby.map,katana:lobby.katana,vitals:[...combat.players.values()].map(p=>combat.view(p,true))};
- applyTeamRound(d);net.send('team-round',d);teamSyncT=0;
+ applyTeamRound(d);
+ for (const pid of net.conns.keys()) net.sendTo(pid, 'team-round', { ...d, vitals: viewsFor(pid) });
+ teamSyncT=0;
 }
 function applyTeamRound(d){
  lobby.matchMode='teams';lobby.roundTarget=teamTarget(d.state.target);lobby.map=knownMap(d.map);lobby.katana=d.katana!==false;
@@ -397,7 +515,7 @@ net.on('team-state',(d,from)=>{if(!net.isHost&&from===net.hostId&&game.matchMode
 function addLateTeammate(id,name){
  combat.add(id,level.teamSpawns[0][0].toArray());const p=combat.players.get(id);p.hp=0;p.deadAt=performance.now()/1000;p.protectedUntil=0;
  scores.set(id,{name,kills:0,deaths:0});
- net.sendTo(id,'team-round',{state:teamMatch.view(),players:lobbyRows(),map:lobby.map,katana:lobby.katana,late:true,vitals:combat.views(),broken:level.breakables.filter(b=>!b.alive).map(b=>b.id)});
+ net.sendTo(id,'team-round',{state:teamMatch.view(),players:lobbyRows(),map:lobby.map,katana:lobby.katana,late:true,vitals:viewsFor(id),broken:level.breakables.filter(b=>!b.alive).map(b=>b.id)});
  publishVitals(combat.view(p));sendScores();syncTeamColors();
 }
 function updateTeamMatch(dt){
@@ -839,7 +957,7 @@ net.onPeerJoin = (from, meta) => {
   antiCheat.ensure(from);
   lobby.players.set(from, { name, team: balancedTeam() }); addRemote(from, name); broadcastLobby();
   if (roundMode() && inMatch() && !game.over) { addLateTeammate(from,name); return; }
-  if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, matchMode: game.matchMode, katana: lobby.katana, killTarget: game.killTarget, vitals: combat.views(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
+  if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, matchMode: game.matchMode, katana: lobby.katana, killTarget: game.killTarget, vitals: viewsFor(from), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
 };
 net.on('lobby', (d) => {
   lobby.matchMode = ['teams','tdm'].includes(d.matchMode) ? d.matchMode : 'ffa'; lobby.roundTarget=teamTarget(d.roundTarget);
@@ -931,9 +1049,9 @@ function netUpdate(dt) {
   if (syncTick % 3 === 0 && inMatch()) {
     let snap = encodeLocal(player, player.weaponIndex, { firing: player.firing, idle: input.idleSeconds > IDLE_FLAG });
     if (net.isHost) {snap = combat.snapshot(net.id, snap);if(!snap){const p=combat.players.get(net.id);if(p)applyVitals({...combat.view(p),correction:true});}}
-    if (snap) net.send('ps', snap, true);
+    if (snap) relayPlayerSnapshot(net.id, snap);
   }
-  if (shotQueue.length) net.broadcast('shots', { k: player.weapon.kind, e: shotQueue.splice(0) });
+  if (shotQueue.length) relayShotVisual(net.id, { k: player.weapon.kind, e: shotQueue.splice(0) });
   if(roundMode()) { updateTeamMatch(dt); return; }
   if (net.isHost && inMatch() && remote.size > 0) game.clockStarted = true;
   const clockOn = inMatch() && !game.over && (net.isHost ? !!game.clockStarted : clockRunning);
@@ -1175,7 +1293,9 @@ function hostStart() {
   const spawns = {}; [...lobby.players.keys()].forEach((id, i) => { spawns[id] = order[i % order.length]; });
   hostMines.clear();approvedGrenades.clear();startMatch(false, spawns[net.id]); combat.clear(lobby.katana);
   for (const id of lobby.players.keys()) applyVitals(combat.add(id, spawnSpots()[spawns[id]].toArray()));
-  net.send('start', { spawns, matchMode: game.matchMode, map: lobby.map || mapKey, katana: lobby.katana, killTarget: game.killTarget, vitals: [...combat.players.values()].map(p => combat.view(p, true)) }); sendScores();
+  const start = { matchMode: game.matchMode, map: lobby.map || mapKey, katana: lobby.katana, killTarget: game.killTarget };
+  for (const pid of net.conns.keys()) net.sendTo(pid, 'start', { ...start, spawns: { [pid]: spawns[pid] }, vitals: viewsFor(pid) });
+  sendScores();
 }
 function startMatch(late, spawnIdx) {
   game.matchMode=lobby.matchMode==='tdm'?'tdm':'ffa'; game.teamScores={red:0,blue:0}; game.round=null; teamMatch=null;

@@ -21,7 +21,19 @@ export const ANTI_CHEAT_RULES = Object.freeze({
   shortAcquisitionMs: 95,
   headConvergenceRad: 0.026,
   headPointError: 0.105,
-  recentAimWindow: 0.65
+  recentAimWindow: 0.65,
+  // Smooth aim-assist never produces a large snap. Detect the stronger signal:
+  // a host-observed, sub-degree lock held for several snapshots while firing
+  // at the head. One good shot is harmless; repeated locks across players are
+  // enforcement evidence.
+  trackingAlignment: 0.9992,
+  trackingMinSamples: 6,
+  trackingMinDuration: 0.42,
+  trackingGap: 0.24,
+  trackingWindow: 6,
+  trackingKickEvents: 3,
+  trackingKickScore: 6,
+  hostHeadAngle: 0.018
 });
 
 const finite = n => Number.isFinite(n);
@@ -81,6 +93,8 @@ export class AntiCheat {
         engagements: new Map(),
         aimEvents: [],
         triggerSamples: [],
+        trackingEvents: [],
+        lock: null,
         targets: new Set(),
         previousDirection: null,
         directionHistory: [],
@@ -108,6 +122,7 @@ export class AntiCheat {
     state.lastAt = at;
     state.aimEvents = state.aimEvents.filter(e => at - e.at < 4);
     state.triggerSamples = state.triggerSamples.filter(e => at - e.at < 4);
+    state.trackingEvents = state.trackingEvents.filter(e => at - e.at < ANTI_CHEAT_RULES.trackingWindow);
     state.movement = state.movement.filter(e => at - e.at < ANTI_CHEAT_RULES.movementWindow);
     for (const [target, e] of state.engagements) {
       if (at - e.lastAt > 0.35) state.engagements.delete(target);
@@ -115,7 +130,39 @@ export class AntiCheat {
     return state;
   }
 
+  _finishTracking(state, at) {
+    const lock = state.lock;
+    state.lock = null;
+    if (!lock) return false;
+    const duration = Math.max(0, lock.lastAt - lock.startedAt);
+    if (lock.samples < ANTI_CHEAT_RULES.trackingMinSamples || duration < ANTI_CHEAT_RULES.trackingMinDuration || lock.shots < 1 || lock.headShots < 1) return false;
+    const event = this._event(state, 'head-tracking-lock', 'medium', {
+      targetId: lock.targetId,
+      samples: lock.samples,
+      duration: Number(duration.toFixed(2)),
+      shots: lock.shots,
+      headShots: lock.headShots,
+      alignment: Number(lock.maxAlignment.toFixed(5))
+    }, at);
+    state.trackingEvents.push({ at, targetId: lock.targetId, event });
+    state.score += 2.9;
+    const uniqueTargets = new Set(state.trackingEvents.map(e => e.targetId)).size;
+    if (state.trackingEvents.length >= ANTI_CHEAT_RULES.trackingKickEvents && uniqueTargets >= ANTI_CHEAT_RULES.trackingKickEvents && state.score >= ANTI_CHEAT_RULES.trackingKickScore) {
+      this._kick(state, 'AIMBOT_TRACKING_HIGH_CONFIDENCE', 'repeated host-observed head locks across targets', true);
+    }
+    return true;
+  }
+
   score(id) { return this.decay(id)?.score || 0; }
+
+  // A shot ray that is absent from every recent host-observed view is not
+  // allowed to reach HostCombat. Keep this preflight separate from evidence
+  // recording so the host can reject the packet before applying damage.
+  shotRayAllowed(id, ray, at = this.now()) {
+    const state = this.decay(id, at), rayUnit = vec(ray) ? unit(ray) : null;
+    if (!state || !rayUnit || !state.directionHistory.length) return true;
+    return state.directionHistory.some(sample => angleBetween(sample.direction, rayUnit) <= ANTI_CHEAT_RULES.recentAimWindow);
+  }
 
   _event(state, kind, severity, details = {}, at = this.now()) {
     const event = { kind, severity, at, ...safeDetails(details) };
@@ -181,6 +228,8 @@ export class AntiCheat {
       state.directionHistory = state.directionHistory.filter(sample => at - sample.at < 0.45).slice(-12);
     }
     state.lastSnapshot = { at, position: vec(position) ? position.slice() : null, yaw, pitch, direction };
+    if (state.lock && at - state.lock.lastAt > ANTI_CHEAT_RULES.trackingGap) this._finishTracking(state, at);
+    let bestLock = null;
     for (const target of Array.isArray(targets) ? targets : []) {
       if (!target || typeof target.id !== 'string' || !vec(target.position) || target.id === id) continue;
       const targetPoint = [target.position[0], target.position[1] + (target.height || 1), target.position[2]];
@@ -192,6 +241,17 @@ export class AntiCheat {
         else Object.assign(entry, { lastAt: at, alignment, position: target.position.slice() });
       } else if (entry && alignment < ANTI_CHEAT_RULES.engagementLeaveCone) {
         state.engagements.delete(target.id);
+      }
+      if (alignment >= ANTI_CHEAT_RULES.trackingAlignment && (!bestLock || alignment > bestLock.alignment)) bestLock = { id: target.id, alignment };
+    }
+    if (bestLock) {
+      if (!state.lock || state.lock.targetId !== bestLock.id) {
+        if (state.lock) this._finishTracking(state, at);
+        state.lock = { targetId: bestLock.id, startedAt: at, lastAt: at, samples: 1, maxAlignment: bestLock.alignment, shots: 0, headShots: 0 };
+      } else {
+        state.lock.lastAt = at;
+        state.lock.samples++;
+        state.lock.maxAlignment = Math.max(state.lock.maxAlignment, bestLock.alignment);
       }
     }
     return state;
@@ -214,18 +274,24 @@ export class AntiCheat {
       measuredHeadError = distance(point, head);
     }
     const measuredDelta = finite(angularDelta) ? angularDelta : state.angularDelta;
+    const hostHeadAngle = state.lastSnapshot?.position && state.lastSnapshot.direction && vec(targetPosition)
+      ? angleBetween(state.lastSnapshot.direction, sub([targetPosition[0], targetPosition[1] + targetHeight, targetPosition[2]], state.lastSnapshot.position))
+      : Infinity;
     const silentInconsistency = reason === 'ray' || reason === 'aim' || reason === 'silent-aim';
     if (silentInconsistency) this.recordProtocolViolation(id, 'silent-aim', 'hard', { reason });
     // A coherent client-supplied aim/ray pair can still be silently aimed at a
     // target from outside the host's recent view history. Allow a generous
     // 0.65-radian window for latency and fast human flicks, but reject a ray
     // that is absent from every recent host snapshot.
-    const rayUnit = vec(ray) ? unit(ray) : null;
-    const hasRecentView = !rayUnit || !state.directionHistory.length || state.directionHistory.some(sample => angleBetween(sample.direction, rayUnit) <= ANTI_CHEAT_RULES.recentAimWindow);
+    const hasRecentView = this.shotRayAllowed(id, ray, at);
     if (!hasRecentView && !silentInconsistency && accepted) this.recordProtocolViolation(id, 'silent-aim', 'hard', { reason: 'outside-recent-view' });
 
     const triggerLike = measuredAcquisition <= ANTI_CHEAT_RULES.triggerDelayMs || (finite(triggerDelayMs) && triggerDelayMs <= ANTI_CHEAT_RULES.triggerDelayMs);
     const headLock = part === 'head' && measuredHeadError <= ANTI_CHEAT_RULES.headPointError;
+    if (state.lock && state.lock.targetId === targetId && accepted) {
+      state.lock.shots++;
+      if (headLock && hostHeadAngle <= ANTI_CHEAT_RULES.hostHeadAngle) state.lock.headShots++;
+    }
     const snap = measuredDelta >= 0.65;
     const extreme = headLock && measuredAcquisition <= ANTI_CHEAT_RULES.shortAcquisitionMs && (snap || immediate);
     if (triggerLike) {
@@ -264,6 +330,7 @@ export class AntiCheat {
       movementViolations: state.movement.length,
       aimEngagements: state.aimEvents.length,
       triggerSamples: state.triggerSamples.length,
+      trackingLocks: state.trackingEvents.length,
       targets: state.targets.size
     };
   }

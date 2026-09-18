@@ -52,6 +52,7 @@ let s = c.snapshot('b', snap('b', {
   14: 999999
 }));
 check('forged health, life, invisibility and protection are replaced', s[7] === 110 && s[14] === c.players.get('b').life && !(s[6] & (4096 | 1024 | 2048 | 4 | 256)));
+check('snapshot weapon cannot overwrite the host ledger', s[5] === 0 && c.players.get('b').snap[5] === 0);
 check('NaN snapshot rejected', c.snapshot('b', snap('b', {
   0: NaN
 })) === null);
@@ -61,9 +62,15 @@ check('invalid weapon rejected', c.snapshot('b', snap('b', {
 check('large teleport rejected', c.snapshot('b', snap('b', {
   0: 1000
 })) === null);
+time = .001;
+check('micro-timestamp speed hack rejected', c.snapshot('b', snap('b', {
+  0: 1.1
+})) === null);
+time = 3;
 let d = packet(),
   result = c.hit('a', d);
 check('damage is calculated by host, not amount field', result.amount === 19 && c.players.get('b').hp === 91);
+check('weapon packet must match the host weapon ledger', c.hit('a', packet({ src: 'sniper' })).reason === 'weapon-state');
 check('replay applies no damage', c.hit('a', d).reason === 'duplicate' && c.players.get('b').hp === 91);
 check('unknown sender rejected', c.hit('stranger', packet()).amount === 0);
 check('stale victim life rejected', c.hit('a', packet({
@@ -94,6 +101,7 @@ check('malformed weapon object cannot throw or damage', c.hit('a', packet({
   }
 })).amount === 0);
 setup();
+c.players.get('b').snap[5] = 3;
 c.snapshot('b', snap('b', {
   5: 3,
   3: Math.PI,
@@ -120,11 +128,16 @@ s = c.snapshot('a', snap('a', {
 }));
 check('disabled blade stance sanitized', s[5] === 0 && !(s[6] & (4 | 256)));
 c.katana = true;
+c.players.get('a').snap[5] = 3;
+check('host accepts a sanitized weapon switch', c.snapshot('a', snap('a', { 5: 3, 6: 64 }))[5] === 3);
 check('enabled katana can deal legitimate damage', c.hit('a', packet({
   src: 'katana'
 })).amount === 55);
 setup();
 c.players.get('b').pos = [0, 0, -10];
+check('host resets the weapon ledger on a new life', c.players.get('a').snap[5] === 0);
+c.players.get('a').snap[5] = 3;
+c.snapshot('a', snap('a', { 5: 3, 6: 64 }));
 check('long-range katana rejected', c.hit('a', packet({
   src: 'katana',
   point: [0, 1, -10]
@@ -138,6 +151,27 @@ for (let i = 0; i < 30; i++) {
 check('fire-rate burst is bounded', accepted === 2);
 time += .1;
 check('normal cadence recovers after burst', c.hit('a', packet()).amount === 19);
+setup();
+check('forged snapshot cannot select sniper', c.snapshot('a', snap('a', { 5: 2, 6: 64 }))[5] === 0);
+c.players.get('a').snap[5] = 2;
+check('host records an approved sniper selection before firing', c.snapshot('a', snap('a', { 5: 2, 6: 64 }))[5] === 2);
+let forgedCadenceAccepted = 0;
+for (let i = 0; i < 20; i++) {
+  c.players.get('b').hp = 110;
+  const rapid = c.hit('a', packet({ src: 'sniper', fireRate: 0, cooldown: 0, interval: 0 }));
+  if (rapid.amount) forgedCadenceAccepted++;
+}
+check('client fire-rate and cooldown claims cannot bypass host sniper cadence', forgedCadenceAccepted === 2);
+setup();
+let weaponSwitchBurst = 0;
+for (let i = 0; i < 12; i++) {
+  const sniper = i % 2 === 0;
+  c.players.get('a').snap[5] = sniper ? 2 : 0;
+  c.snapshot('a', snap('a', { 5: sniper ? 2 : 0, 6: 64 }));
+  c.players.get('b').hp = 110;
+  if (c.hit('a', packet({ src: sniper ? 'sniper' : 'rifle' })).amount) weaponSwitchBurst++;
+}
+check('weapon switching cannot turn the global shot bucket into a sniper stream', weaponSwitchBurst === 4);
 setup();
 c.players.get('b').history = [{
   pos: [0, 0, -3],
@@ -159,6 +193,8 @@ check('geometric headshot gets host multiplier', c.hit('a', packet({
 })).amount === 34);
 setup();
 const old = c.players.get('b').life;
+c.players.get('a').snap[5] = 2;
+c.snapshot('a', snap('a', { 5: 2, 6: 64 }));
 c.hit('a', packet({
   src: 'sniper'
 }));

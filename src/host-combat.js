@@ -4,8 +4,17 @@ import { WEAPON_ORDER, blastDamage } from './combat.js';
 export const COMBAT_RULES = Object.freeze({
   hp: 110,
   protection: 2,
-  respawn: 2.5
+  respawn: 2.5,
+  // A second ledger bucket spans weapon switches, so alternating weapons
+  // cannot turn a sniper into a machine gun.
+  globalShotInterval: 1 / 20,
+  globalShotBurst: 4
 });
+// Client movement is intentionally bounded by the host. The old envelope was
+// large enough for a forged snapshot to jump dozens of metres every tick;
+// this cap leaves room for the 48 m/s local grapple ceiling and packet gaps,
+// while the apparent-speed check below catches micro-timestamp teleports.
+export const movementLimit = (dt) => 2.5 + 58 * Math.min(.5, Math.max(0, dt)) + 8 * Math.max(0, dt - .5);
 // [body damage, head multiplier, hit interval, range, pellet count, falloff]
 // PvP values mirror weapons.js; shotgun pellets share one cadence budget.
 const profiles = {
@@ -78,6 +87,9 @@ export class HostCombat {
         grenades: 3,
         mines: 3
       };
+    // A player starts with the host-approved rifle. Shots must match this
+    // ledger weapon until a sanitized snapshot records a real weapon switch.
+    p.snap = [...p.pos, 0, 0, 0, 64, COMBAT_RULES.hp, 0, 0, 0, 0, 0, 0, p.life];
     this.players.set(id, p);
     return this.view(p, true);
   }
@@ -108,8 +120,8 @@ export class HostCombat {
       now = this.now();
     if (!vector(pos) || Math.abs(s[4]) > 1.6 || s.slice(8, 11).some(v => Math.abs(v) > 350)) return null;
     if (p.hp > 0 && s[14] === p.life && this.enabled()) {
-      // A generous envelope keeps normal grapple/dash latency from causing kicks.
-      if (dist(pos, p.pos) > 12 + 150 * Math.min(1, now - p.lastSnap)) return null;
+      const elapsed = Math.max(.001, now - p.lastSnap), moved = dist(pos, p.pos);
+      if (moved > movementLimit(elapsed) || moved / elapsed > 75) return null;
       p.pos = pos;
       p.lastSnap = now;
       p.history.push({
@@ -119,7 +131,12 @@ export class HostCombat {
       });
       p.history = p.history.filter(h => now - h.t < .4).slice(-12);
     }
+    // Weapon selection is a host-owned ledger. The snapshot carries the
+    // visual state, but it must never be allowed to change the weapon that
+    // combat.hit will accept; otherwise a forged snapshot could bypass the
+    // weapon-select message entirely.
     const out = [...s];
+    out[5] = Number.isInteger(p.snap?.[5]) ? p.snap[5] : 0;
     out.splice(0, 3, ...p.pos);
     out[7] = Math.round(p.hp);
     out[14] = p.life;
@@ -165,6 +182,8 @@ export class HostCombat {
     a.seen.add(d.id);
     if (a.seen.size > 512) a.seen.delete(a.seen.values().next().value);
     if (d.src === 'katana' && !this.katana) return reject('katana');
+    const weaponIndex = WEAPON_ORDER.indexOf(d.src);
+    if (a.snap?.[5] !== weaponIndex) return reject('weapon-state');
     if (dist(d.from, center(a)) > 4) return reject('origin');
     const history = [{
       pos: b.pos,
@@ -188,7 +207,7 @@ export class HostCombat {
     }
     if (!this.allow(a, d.src, spec[2] / (spec[4] || 1), (spec[4] || 1) * 2)) return reject('rate');
     // A second global ceiling also limits cycling through weapons to bypass cadence.
-    if (!this.allow(a, 'all', 1 / 40, 24)) return reject('rate');
+    if (!this.allow(a, 'all', COMBAT_RULES.globalShotInterval, COMBAT_RULES.globalShotBurst)) return reject('rate');
     if (this.now() < b.protectedUntil) return reject('protected');
     // A short, front-facing guard can parry; a held client flag cannot grant immunity.
     if (this.katana && b.snap?.[5] === 3 && b.snap[6] & 4 && this.now() - b.blockAt < .26) {

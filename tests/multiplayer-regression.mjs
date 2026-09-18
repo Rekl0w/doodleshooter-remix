@@ -40,7 +40,7 @@ try {
  // Feedback spy counts actual HUD calls, while the real rendering remains active.
  for(const p of pages)await p.evaluate(()=>{window.hitCalls=[];const h=__game.hud,original=h.hitmarker.bind(h);h.hitmarker=(...args)=>{hitCalls.push(args);original(...args);};});
  await host.evaluate(()=>{const n=__game.net;window.damageHandler=n.handlers.get('combat-hit');n.on('combat-hit',(d,f)=>setTimeout(()=>damageHandler(d,f),350));});
- const shot=async(p,id)=>p.evaluate(id=>{const g=__game,t=g.remote.get(id);g.player.switchTo(6);return g.player.weapon.fireRay(g.player.eye,g.player.forward.copy(t.center.clone().sub(g.player.eye).normalize()));},id);
+ const shot=async(p,id)=>{await p.evaluate(id=>{const g=__game,t=g.remote.get(id);g.player.switchTo(6);const d=t.center.clone().sub(g.player.eye).normalize();g.player.yaw=Math.atan2(-d.x,-d.z);g.player.pitch=Math.asin(d.y);g.player.forward.copy(d);},id);await p.waitForTimeout(180);return p.evaluate(id=>{const g=__game,t=g.remote.get(id),d=t.center.clone().sub(g.player.eye).normalize();g.player.forward.copy(d);return g.player.weapon.fireRay(g.player.eye,d);},id);};
  const hp=await guest.evaluate(()=>__game.player.hp);
  check('ray hits opponent geometry',await shot(host,guestId));
  check('no speculative X before damage arrives',await host.evaluate(()=>hitCalls.length===0));
