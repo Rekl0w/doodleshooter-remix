@@ -313,6 +313,13 @@ const hiddenSnapshot = snap => {
   out[8] = out[9] = out[10] = out[11] = out[12] = out[13] = 0;
   return out;
 };
+// A player standing on a wall edge can alternate between one clear ray and
+// one blocked ray as centimetre snapshots arrive. Keep the recipient's last
+// visibility decision until the new state is observed consistently, so cover
+// does not make a remote body blink while still preserving redaction.
+const visibilityStates = new Map();
+const VISIBLE_CONFIRM = 2;
+const HIDDEN_CONFIRM = 3;
 const visibleSnapshotFor = (from, snap, viewerId) => {
   if (viewerId === from) return null;
   const source = combat.players.get(from), viewer = combat.players.get(viewerId);
@@ -322,8 +329,22 @@ const visibleSnapshotFor = (from, snap, viewerId) => {
   const eye = new THREE.Vector3(viewer.pos[0], viewer.pos[1] + (viewerCrouched ? .88 : 1.6), viewer.pos[2]);
   const center = new THREE.Vector3(snap[0], snap[1] + (sourceCrouched ? .6 : 1), snap[2]);
   const head = new THREE.Vector3(snap[0], snap[1] + (sourceCrouched ? .95 : 1.55), snap[2]);
-  const visible = world.hasLineOfSight(eye, center) || world.hasLineOfSight(eye, head);
-  return visible ? snap : hiddenSnapshot(snap);
+  const rawVisible = world.hasLineOfSight(eye, center) || world.hasLineOfSight(eye, head);
+  const key = `${from}>${viewerId}`;
+  let state = visibilityStates.get(key);
+  if (!state || state.sourceLife !== source.life || state.viewerLife !== viewer.life) {
+   state = { sourceLife: source.life, viewerLife: viewer.life, visible: rawVisible, visibleStreak: rawVisible ? 1 : 0, hiddenStreak: rawVisible ? 0 : 1 };
+  } else if (rawVisible) {
+   state.hiddenStreak = 0;
+   state.visibleStreak++;
+   if (!state.visible && state.visibleStreak >= VISIBLE_CONFIRM) state.visible = true;
+  } else {
+   state.visibleStreak = 0;
+   state.hiddenStreak++;
+   if (state.visible && state.hiddenStreak >= HIDDEN_CONFIRM) state.visible = false;
+  }
+  visibilityStates.set(key, state);
+  return state.visible ? snap : hiddenSnapshot(snap);
 };
 const relayPlayerSnapshot = (from, snap) => {
  if (!net.isHost) { net.send('ps', snap, true); return; }
@@ -546,7 +567,7 @@ function teamSpawnPositions(){
 function hostStartTeams(){
  if(!TEAMS.every(t=>[...lobby.players.values()].some(p=>p.team===t))){lobby.status=ui('Both teams need at least one player');renderLobby();return;}
  if(!teamMaps.includes(lobby.map))lobby.map='dust2';
- scores.clear();for(const[id,p]of lobby.players)scores.set(id,{name:p.name,kills:0,deaths:0});
+ scores.clear();visibilityStates.clear();for(const[id,p]of lobby.players)scores.set(id,{name:p.name,kills:0,deaths:0});
  teamMatch=new TeamMatch({target:lobby.roundTarget});if(DEV_DEBUG&&window.__game)window.__game.teamMatch=teamMatch;teamMatch.startRound();hostTeamRound();sendScores();
 }
 function hostTeamRound(){
@@ -1099,7 +1120,7 @@ const sceneClock = new SceneClock();
 let scenePingT = 0, sceneHost = null;
 net.on('scene-ping', (d, from) => { if (net.isHost && Number.isInteger(d?.id)) net.sendTo(from, 'scene-pong', { id: d.id, time: sceneClock.time() }); });
 net.on('scene-pong', (d, from) => { if (!net.isHost && from === net.hostId) sceneClock.accept(d); });
-if (DEV_DEBUG) Object.assign(window.__game, { sceneClock });
+if (DEV_DEBUG) Object.assign(window.__game, { sceneClock, visibilityStates });
 let syncTick = 0;
 function netUpdate(dt) {
   if (net.isHost && online() && inMatch() && !game.over) { combat.tick(); tickHostMines(dt); combatSyncT -= dt; if (combatSyncT <= 0) { combatSyncT = .2; for (const v of combat.views()) publishVitals(v); } }
@@ -1123,7 +1144,7 @@ function netUpdate(dt) {
   if (net.isHost && clockOn) { game.matchT += dt; if (matchLeft <= 0) { const rows = sortedScores(); const w = game.matchMode==='tdm' ? tdmTimeWinner() : rows.length ? { id: rows[0][0], name: rows[0][1].name } : { id: net.id, name: myName }; net.send('end', w); endMatch(w); } }
 }
 function leaveOnline(reason) {
-  net.leave(); for (const id of [...remote.keys()]) removeRemote(id); antiCheat.players.clear(); lobby.players.clear(); scores.clear(); hud.setBoard(null);
+  net.leave(); visibilityStates.clear(); for (const id of [...remote.keys()]) removeRemote(id); antiCheat.players.clear(); lobby.players.clear(); scores.clear(); hud.setBoard(null);
   if (game.state !== 'start') { game.state = 'start'; game.mode = 'solo'; setArena(false); resetGame(); hud.setGameplayVisible(false); }
   game.menu = false; lobby.status = reason || ''; screen = 'online'; showStart();
 }
@@ -1333,7 +1354,7 @@ function showDead() {
 function menuBtnHTML() { return ui("<div class=\"online menubtn\"><div class=\"row\"><button type=\"button\" class=\"alt\" id=\"menuBtn\">Main menu</button></div></div>"); }
 function wireMenuBtn() { const b = hud.el.panel.querySelector('#menuBtn'); if (b) b.addEventListener('click', (e) => { e.stopPropagation(); toMainMenu(); }); }
 function toMainMenu() { game.state = 'start'; game.mode = 'solo'; game.menu = false; setArena(false); resetGame(); audio.reelLoop(false); input.exitLock(); hud.setGameplayVisible(false); screen = 'main'; showStart(); }
-function toLobbyScreen() { net.inMatch = false; for (const r of remote.values()) r.lastSeen = performance.now(); setArena(true); resetGame(); game.state = 'lobby'; game.over = null; game.menu = false; hud.setGameplayVisible(false); hud.setBoard(null); screen = 'lobby'; showStart(); }
+function toLobbyScreen() { net.inMatch = false; visibilityStates.clear(); for (const r of remote.values()) r.lastSeen = performance.now(); setArena(true); resetGame(); game.state = 'lobby'; game.over = null; game.menu = false; hud.setGameplayVisible(false); hud.setBoard(null); screen = 'lobby'; showStart(); }
 
 // ---------------- run control ----------------
 function resetGame() {
@@ -1355,7 +1376,7 @@ function hostStart() {
   // deal everyone a different spot, shuffled so the same people do not always start together
   setArena(true); const order = spawnSpots().map((_, i) => i); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
   const spawns = {}; [...lobby.players.keys()].forEach((id, i) => { spawns[id] = order[i % order.length]; });
-  hostMines.clear();approvedGrenades.clear();startMatch(false, spawns[net.id]); combat.clear(lobby.katana);
+  hostMines.clear();approvedGrenades.clear();visibilityStates.clear();startMatch(false, spawns[net.id]); combat.clear(lobby.katana);
   for (const id of lobby.players.keys()) applyVitals(combat.add(id, spawnSpots()[spawns[id]].toArray()));
   const start = { matchMode: game.matchMode, map: lobby.map || mapKey, katana: lobby.katana, killTarget: game.killTarget };
   for (const pid of net.conns.keys()) net.sendTo(pid, 'start', { ...start, spawns: { [pid]: spawns[pid] }, vitals: viewsFor(pid) });

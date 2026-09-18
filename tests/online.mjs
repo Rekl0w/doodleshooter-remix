@@ -124,6 +124,21 @@ try {
   check('wall-hidden host snapshot is redacted for the guest', await guest.evaluate(hostId => {
     const r = __game.remote.get(hostId); return !!r && r.away === true && r.root?.visible === false;
   }, hostId));
+  await host.evaluate(() => { const g = __game; g.world.removeBox(g._visibilityTestWall); g._visibilityTestWall = null; });
+  await host.waitForFunction(({ hostId, guestId }) => {
+    const s = __game.visibilityStates.get(`${hostId}>${guestId}`);
+    return !!s && s.visibleStreak >= 1;
+  }, { hostId, guestId }, { timeout: 5000 });
+  check('one clear snapshot does not reveal a wall-edge player', await host.evaluate(({ hostId, guestId }) => {
+    const s = __game.visibilityStates.get(`${hostId}>${guestId}`); return !!s && s.visible === false && s.visibleStreak === 1;
+  }, { hostId, guestId }));
+  await host.evaluate(() => {
+    const g = __game;
+    g._visibilityTestWall = g.world.addBox({ x: -20, y: 0, z: -5 }, { x: 20, y: 4, z: -4.5 });
+    g.world.finalize();
+  });
+  await host.waitForTimeout(220);
+  check('reappearing cover keeps the remote body hidden', await guest.evaluate(hostId => __game.remote.get(hostId)?.away === true, hostId));
   await host.evaluate(() => { const g = __game; g.player.switchTo(0); g.player.weapon.fireRay(g.player.eye, g.player.forward); });
   await host.waitForTimeout(220);
   check('wall-hidden shooter tracer is not sent to the guest', await guest.evaluate(() => shotVisuals.length === 0));
