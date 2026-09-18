@@ -59,6 +59,19 @@ try {
     g.player.body.pos.set(-44, 0, 38); g.player.body.vel.set(0, 0, 0); g.player.body.onGround = true;
     g.player.yaw = 0; g.player.pitch = 0;
   });
+  await guest.evaluate(() => {
+    const g = __game, p = g.player, b = p.body;
+    const flags = (p.alive ? 64 : 0) | (b.onGround ? 16 : 0);
+    // Reliable WebRTC can flush several valid render snapshots in one task.
+    // Their positions are plausible, but the host receive timestamps are only
+    // a few milliseconds apart. This used to create impossible-speed strikes.
+    for (let i = 1; i <= 5; i++) g.net.send('ps', [b.pos.x + i * .2, b.pos.y, b.pos.z, p.yaw, p.pitch, p.weaponIndex, flags, Math.round(p.hp), 0, 0, 0, 0, 0, 0, p.lifeId], true);
+  });
+  await guest.waitForTimeout(450);
+  const burstEvidence = await host.evaluate(id => ({ active: __game.net.conns.has(id), evidence: __game.antiCheat.evidence(id) }), guestId);
+  console.log('BURST', JSON.stringify(burstEvidence));
+  assert.equal(burstEvidence.active, true, 'a valid queued snapshot burst must not kick the guest');
+  assert.equal(burstEvidence.evidence.movementViolations, 0, 'a valid queued snapshot burst must not create speed violations');
   const start = await guest.evaluate(() => ({ pos: __game.player.body.pos.toArray(), yaw: __game.player.yaw, map: __game.level.key }));
   console.log('START', JSON.stringify(start));
 

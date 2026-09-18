@@ -62,6 +62,14 @@ check('invalid weapon rejected', c.snapshot('b', snap('b', {
 check('large teleport rejected', c.snapshot('b', snap('b', {
   0: 1000
 })) === null);
+setup();
+c.snapshot('b', snap('b'));
+time = 3.005;
+const burstPosition = c.players.get('b').pos.slice();
+const burst = c.snapshot('b', snap('b', {
+  0: burstPosition[0] + .35
+}));
+check('reliable snapshot burst is ignored without advancing position', burst && burst[0] === burstPosition[0] && c.players.get('b').pos.every((v, i) => v === burstPosition[i]));
 time = .001;
 check('micro-timestamp speed hack rejected', c.snapshot('b', snap('b', {
   0: 1.1

@@ -400,9 +400,13 @@ net.onIngress=(msg,from)=>{
    net.sendTo(from,'combat-state',{...combat.view(p),correction:true});
    return null;
   }
-  const moved = vector(d.slice(0,3)) ? Math.hypot(d[0]-p.pos[0],d[1]-p.pos[1],d[2]-p.pos[2]) : Infinity, dt = Math.max(.001, now - p.lastSnap), maxDistance = movementLimit(dt);
-  if (p.hp > 0 && now > (p.movementGraceUntil || 0) && (moved > maxDistance || moved / dt > 75)) antiCheat.recordMovementViolation(from,{distance:moved,maxDistance,dt,reason:moved / dt > 75 ? 'impossible-speed' : 'impossible-snapshot'});
-  if (p.hp > 0 && now > (p.movementGraceUntil || 0)) {
+  const rawDt = now - p.lastSnap, timingReliable = rawDt >= COMBAT_RULES.minSnapshotInterval;
+  const moved = vector(d.slice(0,3)) ? Math.hypot(d[0]-p.pos[0],d[1]-p.pos[1],d[2]-p.pos[2]) : Infinity, dt = Math.max(.001, rawDt), maxDistance = movementLimit(dt);
+  // Do not turn a reliable-channel delivery burst into a speed violation.
+  // HostCombat ignores the same stale snapshot and waits for the next spaced
+  // packet, so no client can use this grace to advance its authoritative pos.
+  if (timingReliable && p.hp > 0 && now > (p.movementGraceUntil || 0) && (moved > maxDistance || moved / dt > 75)) antiCheat.recordMovementViolation(from,{distance:moved,maxDistance,dt,reason:moved / dt > 75 ? 'impossible-speed' : 'impossible-snapshot'});
+  if (timingReliable && p.hp > 0 && now > (p.movementGraceUntil || 0)) {
    const pathViolation = snapshotPathViolation(p, d);
    if (pathViolation) {
     // A destination inside a collider is deterministic. A short segment that

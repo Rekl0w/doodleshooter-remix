@@ -12,7 +12,12 @@ export const COMBAT_RULES = Object.freeze({
   // The local controller clamps the full body velocity to 48 m/s. Keep a
   // little room for rounding, but reject forged velocity vectors before they
   // can widen the host's grenade envelope or mislead remote interpolation.
-  maxSnapshotVelocity: 55
+  maxSnapshotVelocity: 55,
+  // WebRTC can deliver several reliable snapshots in one browser task after
+  // a short stall. They share the same receive timestamp even though they
+  // were produced on different render frames. Treat that burst as stale
+  // transport state; the next spaced snapshot is checked normally.
+  minSnapshotInterval: 0.02
 });
 // Client movement is intentionally bounded by the host. The old envelope was
 // large enough for a forged snapshot to jump dozens of metres every tick;
@@ -124,16 +129,23 @@ export class HostCombat {
       now = this.now();
     if (!vector(pos) || Math.abs(s[4]) > 1.6 || s.slice(8, 11).some(v => Math.abs(v) > 350) || Math.hypot(...s.slice(8, 11)) > COMBAT_RULES.maxSnapshotVelocity) return null;
     if (p.hp > 0 && s[14] === p.life && this.enabled()) {
-      const elapsed = Math.max(.001, now - p.lastSnap), moved = dist(pos, p.pos);
-      if (moved > movementLimit(elapsed) || moved / elapsed > 75) return null;
-      p.pos = pos;
-      p.lastSnap = now;
-      p.history.push({
-        pos: [...pos],
-        t: now,
-        crouch: !!(s[6] & 1)
-      });
-      p.history = p.history.filter(h => now - h.t < .4).slice(-12);
+      const elapsed = now - p.lastSnap;
+      if (elapsed < 0) return null;
+      // Keep the last accepted position during a same-task delivery burst.
+      // The sanitized packet below still carries the host position, so a
+      // queued packet cannot advance the authoritative player for free.
+      if (elapsed >= COMBAT_RULES.minSnapshotInterval) {
+        const moved = dist(pos, p.pos);
+        if (moved > movementLimit(elapsed) || moved / elapsed > 75) return null;
+        p.pos = pos;
+        p.lastSnap = now;
+        p.history.push({
+          pos: [...pos],
+          t: now,
+          crouch: !!(s[6] & 1)
+        });
+        p.history = p.history.filter(h => now - h.t < .4).slice(-12);
+      }
     }
     // Weapon selection is a host-owned ledger. The snapshot carries the
     // visual state, but it must never be allowed to change the weapon that

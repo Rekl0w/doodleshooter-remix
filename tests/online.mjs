@@ -59,7 +59,7 @@ try {
   }, { id: earlyGuestId, pos: minePos });
   await guest.evaluate(pos => {
     const g = __game;
-    for (const m of g.player.ordnance.remoteMines.values()) g.scene.remove(m.mesh);
+    for (const m of g.player.ordnance.remoteMines.values()) m.mesh.removeFromParent?.();
     g.player.ordnance.remoteMines.clear();
     g.player.body.pos.set(pos[0], pos[1], pos[2] + 10); g.player.body.vel.set(0, 0, 0); g.input.keys = {};
   }, minePos);
