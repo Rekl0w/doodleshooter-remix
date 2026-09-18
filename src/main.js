@@ -18,6 +18,7 @@ import { RemotePlayer, encodeLocal } from './players.js';
 import { Net } from './net.js';
 import { HUD, CONTROLS_HTML } from './hud.js';
 import { HostCombat, vector } from './host-combat.js';
+import { AntiCheat } from './anti-cheat.js';
 import { Nameplates } from './nameplates.js';
 import { audio } from './audio.js';
 import { inMeleeArc, WEAPON_ORDER } from './combat.js';
@@ -51,7 +52,7 @@ function setLevel(key, on, force = false) {
   level = buildLevel(R.scene, world, key, { arena: on }); nav = new NavGrid(world, level.bounds, level.navCell || 1).build();
   R.post.uniforms.uDesert.value = key === 'dust2' ? 1 : 0;
   R.setAppearance(appearanceFor(key));
-  ctx.level = level; ctx.nav = nav; if (window.__game) { window.__game.level = level; window.__game.nav = nav; }
+  ctx.level = level; ctx.nav = nav; if (DEV_DEBUG && window.__game) { window.__game.level = level; window.__game.nav = nav; }
   audio.setTune(key === 'mexico' ? 'mexico' : 'district');
 }
 const setArena = (on) => setLevel(knownMap(net.active ? (lobby.map || mapKey) : mapKey), on);
@@ -101,7 +102,11 @@ const teamMaps = ['dust2', 'foundry', 'quarter'];
 let teamMatch = null, teamSyncT = 0;
 const scores = new Map();      // peer id -> { name, kills, deaths }
 let screen = 'main';           // which start-screen panel is showing: main | online | lobby
-window.__game = { ctx, game, player, enemies, nav, world, level, hud, effects, input, net, remote, lobby, scores };
+// The complete debug object is useful for local automated tests and development,
+// but it must never become a production cheat API.
+const DEV_DEBUG = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+const debugGame = { ctx, game, player, enemies, nav, world, level, hud, effects, input, net, remote, lobby, scores };
+if (DEV_DEBUG) window.__game = debugGame;
 
 const deathEvents = new Set(), hostMines = new Map(), approvedGrenades = new Map();
 let combatSyncT = 0;
@@ -111,7 +116,17 @@ const combat = new HostCombat({
  changed: v => publishVitals(v),
  died: d => { net.send('combat-death', d); combatDeath(d); tallyDeath(d.victim, d.killer); }
 });
-window.__game.combat = combat;
+function kickForCheating(id, info = {}) {
+  if (!net.isHost || id === net.id) return false;
+  console.warn('[anti-cheat] player removed', id, info.reason, info.evidence);
+  return net.enforceKick(id, { reason: info.reason || 'anti-cheat', ban: info.ban !== false, evidence: info.evidence || null });
+}
+const antiCheat = new AntiCheat({
+  onKick: kickForCheating,
+  onEvent: event => { if (net.isHost) console.info('[anti-cheat]', event); }
+});
+if (DEV_DEBUG) window.__game.combat = combat;
+if (DEV_DEBUG) window.__game.antiCheat = antiCheat;
 ctx.controlsFrozen = () => roundMode() && !roundLive();
 ctx.authorityActive = () => net.active && online();
 function applyVitals(v) {
@@ -141,6 +156,19 @@ net.on('combat-state',(v,from)=>{if(from===net.hostId)applyVitals(v);});
 net.on('combat-hit',(d,from)=>{
  if(!net.isHost||!online()||!inMatch()||game.over)return;
  const result={...combat.hit(from,d),target:d?.target};
+ if (from !== net.id && combat.players.get(from)?.hp > 0) {
+  const target = combat.players.get(d?.target); antiCheat.recordHitResult(from, result, {
+   targetId: d?.target,
+   targetPosition: target?.pos,
+   targetHeight: (target?.snap?.[6] & 1) ? .6 : 1,
+   point: d?.point,
+   ray: d?.ray,
+   part: d?.part,
+   immediate: result.reason === 'rate'
+  });
+  const deterministic = { invalid: 'invalid-combat', duplicate: 'replay-hit', origin: 'impossible-origin', stale: 'forged-life', rate: 'weapon-cadence' }[result.reason];
+  if (deterministic) antiCheat.recordProtocolViolation(from, deterministic, result.reason === 'invalid' || result.reason === 'origin' ? 'hard' : 'medium', { weapon: d?.src });
+ }
  if(from===net.id)acceptHitResult(result);else net.sendTo(from,'combat-result',result);
 });
 net.on('combat-respawn',(d,from)=>{
@@ -199,22 +227,36 @@ function tickHostMines() {
   if(target)removeHostMine(key,m,true);
  }
 }
+const antiReject = (from, kind, details = {}, severity = 'hard') => { if (net.isHost && from !== net.id) antiCheat.recordProtocolViolation(from, kind, severity, details); return null; };
+net.onProtocolViolation = (from, kind, details) => { if (net.isHost && from !== net.id) antiCheat.recordProtocolViolation(from, kind, kind === 'protocol-bypass' ? 'low' : 'hard', details); };
 net.onIngress=(msg,from)=>{
  const d=msg.d,p=combat.players.get(from);
- if(!roundLive() && !['ps','scene-ping','mine-sync','team-select'].includes(msg.t))return null;
- if(!['team-select','ps','nade','ordnance','shots','brk','mine-sync','take','scene-ping','combat-hit','combat-respawn','combat-fall','combat-cut'].includes(msg.t))return null;
+ if(!roundLive() && !['ps','scene-ping','mine-sync','team-select'].includes(msg.t))return antiReject(from,'out-of-phase-packet',{type:msg.t},'medium');
+ if(!['team-select','ps','nade','ordnance','shots','brk','mine-sync','take','scene-ping','combat-hit','combat-respawn','combat-fall','combat-cut'].includes(msg.t))return antiReject(from,'unknown-combat-packet',{type:msg.t},'hard');
  if(['team-select','mine-sync','take','scene-ping'].includes(msg.t))return {...msg,relay:false,to:undefined};
  if(msg.t==='ps') {
-  if(!inMatch())return null;const snap=combat.snapshot(from,d);
+  if(!inMatch())return antiReject(from,'snapshot-outside-match',{},'medium');
+  if(!p || !Array.isArray(d) || d.length !== 15) return antiReject(from,'malformed-snapshot',{length:Array.isArray(d)?d.length:null});
+  // Dead clients may keep rendering stale local state while waiting to
+  // respawn. Ignore those snapshots quietly; forged life ids from a living
+  // combat record remain a deterministic violation and accumulate strikes.
+  if (p.hp <= 0) return null;
+  const now = performance.now() / 1000;
+  if (d[14] !== p.life) { if (now <= (p.spawnGraceUntil || 0)) return null; return antiReject(from,'forged-life',{expected:p.life,received:d[14]}); }
+  if (!Number.isInteger(d[5]) || d[5] < 0 || d[5] >= WEAPON_ORDER.length) return antiReject(from,'invalid-weapon',{weapon:d[5]});
+  const moved = vector(d.slice(0,3)) ? Math.hypot(d[0]-p.pos[0],d[1]-p.pos[1],d[2]-p.pos[2]) : Infinity, dt = Math.max(.001, now - p.lastSnap), maxDistance = 12 + 150 * Math.min(1, dt);
+  if (p.hp > 0 && now > (p.movementGraceUntil || 0) && moved > maxDistance) antiCheat.recordMovementViolation(from,{distance:moved,maxDistance,dt,reason:'impossible-snapshot'});
+  const snap=combat.snapshot(from,d);
   if(!snap){if(p)net.sendTo(from,'combat-state',{...combat.view(p),correction:true});return null;}
+  antiCheat.recordSnapshot(from,{at:now,position:snap.slice(0,3),yaw:snap[3],pitch:snap[4],targets:[...combat.players.values()].filter(t=>t.id!==from&&t.hp>0).map(t=>({id:t.id,position:t.pos,height:(t.snap?.[6]&1)?.6:1}))});
   return {...msg,d:snap,relay:true,to:undefined};
  }
  if(msg.t==='nade'){if(!allowGrenade(d,from))return null;return {...msg,d:{id:d.id,pos:d.pos,vel:d.vel},relay:true,to:undefined};}
  if(msg.t==='ordnance'){if(!allowMine(d,from))return null;return {...msg,d:{op:d.op,id:d.id,pos:d.pos,map:d.map},relay:true,to:undefined};}
- if(msg.t==='shots'&&(!p||p.hp<=0||!Array.isArray(d.e)||d.e.length>120||d.e.length%3!==0||!d.e.every(n=>Number.isFinite(n)&&Math.abs(n)<=2000)||!WEAPON_ORDER.includes(d.k)))return null;
- if(['cut','parry'].includes(msg.t))return null; // Never accept unverified client knockbacks/rope cuts.
- if(msg.t==='brk'&&(!p||p.hp<=0||!Number.isInteger(d.id)||!level.breakables[d.id]||new THREE.Vector3(...p.pos).distanceTo(level.breakables[d.id].pos)>600||!world.hasLineOfSight(new THREE.Vector3(...p.pos).add(new THREE.Vector3(0,1.6,0)),level.breakables[d.id].pos,box=>box===level.breakables[d.id].box)||!combat.allow(p,'break',.08,4)))return null;
- if(msg.t==='fell')return null;
+ if(msg.t==='shots'&&(!p||p.hp<=0||!Array.isArray(d.e)||d.e.length>120||d.e.length%3!==0||!d.e.every(n=>Number.isFinite(n)&&Math.abs(n)<=2000)||!WEAPON_ORDER.includes(d.k)))return antiReject(from,'invalid-shot',{weapon:d?.k});
+ if(['cut','parry'].includes(msg.t))return antiReject(from,'protocol-bypass',{type:msg.t}); // Never accept unverified client knockbacks/rope cuts.
+ if(msg.t==='brk'&&(!p||p.hp<=0||!Number.isInteger(d.id)||!level.breakables[d.id]||new THREE.Vector3(...p.pos).distanceTo(level.breakables[d.id].pos)>600||!world.hasLineOfSight(new THREE.Vector3(...p.pos).add(new THREE.Vector3(0,1.6,0)),level.breakables[d.id].pos,box=>box===level.breakables[d.id].box)||!combat.allow(p,'break',.08,4)))return antiReject(from,'invalid-breakable',{id:d?.id},'medium');
+ if(msg.t==='fell')return antiReject(from,'unverified-fall',{},'medium');
  return msg;
 };
 ctx.localPeerId=()=>net.id;
@@ -325,7 +367,7 @@ function hostStartTeams(){
  if(!TEAMS.every(t=>[...lobby.players.values()].some(p=>p.team===t))){lobby.status=ui('Both teams need at least one player');renderLobby();return;}
  if(!teamMaps.includes(lobby.map))lobby.map='dust2';
  scores.clear();for(const[id,p]of lobby.players)scores.set(id,{name:p.name,kills:0,deaths:0});
- teamMatch=new TeamMatch({target:lobby.roundTarget});window.__game.teamMatch=teamMatch;teamMatch.startRound();hostTeamRound();sendScores();
+ teamMatch=new TeamMatch({target:lobby.roundTarget});if(DEV_DEBUG&&window.__game)window.__game.teamMatch=teamMatch;teamMatch.startRound();hostTeamRound();sendScores();
 }
 function hostTeamRound(){
  setArena(true);const positions=teamSpawnPositions();
@@ -782,7 +824,7 @@ function addRemote(id, name) {
   remote.set(id, rp); return rp;
 }
 function removeRemote(id) {
-  clearHostMines(id); combat.players.delete(id);
+  clearHostMines(id); combat.players.delete(id); if (!net.bannedPeers.has(id)) antiCheat.remove(id);
   for (const [key, hit] of pendingHits) if (hit.target === id) pendingHits.delete(key); player.ordnance.removePeer(id); const r = remote.get(id); if (r) { r.dispose(); remote.delete(id); } lobby.players.delete(id); scores.delete(id); }
 function lobbyRows() { return [...lobby.players.entries()].map(([id, p]) => ({ id, name: p.name, team: p.team })); }
 function broadcastLobby(render = true) { net.send('lobby', { matchMode: lobby.matchMode, roundTarget: teamTarget(lobby.roundTarget), players: lobbyRows(), hostId: net.id, isPublic: lobby.isPublic, map: lobby.map || mapKey, katana: lobby.katana, killTarget: normalizeKillTarget(lobby.killTarget), shown: net.aliasCode || net.code }); syncTeamColors(); if(render)renderLobby(); }
@@ -794,6 +836,7 @@ net.hostName = myName;
 net.onPeerJoin = (from, meta) => {
   const name = (typeof meta?.name === 'string' ? meta.name : 'doodle').slice(0, 14);
 
+  antiCheat.ensure(from);
   lobby.players.set(from, { name, team: balancedTeam() }); addRemote(from, name); broadcastLobby();
   if (roundMode() && inMatch() && !game.over) { addLateTeammate(from,name); return; }
   if (game.state === 'play' || game.state === 'dying') { const spawn = farthestSpawnIndex(); const v = combat.add(from, spawnSpots()[spawn].toArray()); publishVitals(v); if (!scores.has(from)) scores.set(from, { name, kills: 0, deaths: 0 }); net.sendTo(from, 'start', { late: true, spawn, matchMode: game.matchMode, katana: lobby.katana, killTarget: game.killTarget, vitals: combat.views(), map: lobby.map || mapKey, broken: level.breakables.filter((b) => !b.alive).map((b) => b.id) }); sendScores(); hud.kill(name + ui(" joined"), 0); }
@@ -808,7 +851,7 @@ net.on('lobby', (d) => {
   syncTeamColors(); renderLobby();
 });
 net.on('leave', (d) => { const nm = (lobby.players.get(d.id) || {}).name; removeRemote(d.id); if (inMatch()) hud.kill((nm || ui("Player")) + ui(" left"), 0); renderLobby(); });
-net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; lobby.katana = d.katana !== false; lobby.killTarget = normalizeKillTarget(d.killTarget); if (d.map) lobby.map = knownMap(d.map); lobby.matchMode=d.matchMode==='tdm'?'tdm':'ffa'; startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); for (const v of d.vitals || []) applyVitals(v); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
+net.on('start', (d, from) => { if (net.isHost || from !== net.hostId) return; lobby.katana = d.katana !== false; lobby.killTarget = normalizeKillTarget(d.killTarget); if (d.map) { lobby.map = knownMap(d.map); setLevel(lobby.map, true, true); } lobby.matchMode=d.matchMode==='tdm'?'tdm':'ffa'; startMatch(!!d.late, d.spawns ? d.spawns[net.id] : d.spawn); for (const v of d.vitals || []) applyVitals(v); if (d.broken) for (const id of d.broken) { const br = level.breakables[id]; if (br) breakProp(br, null, false, true); } });
 net.on('end', (d) => endMatch(d));
 net.on('backtolobby', () => { if (!net.isHost) toLobbyScreen(); });
 net.on('pickup', (d) => { if (!net.isHost) spawnPickup(d.kind, new THREE.Vector3().fromArray(d.pos), d.id); });
@@ -867,14 +910,14 @@ function idleUpdate(dt) {
   if (idle <= limit - IDLE_WARN) idleWarned = false;
   if (idle > limit && canDrop) { const back = net.isHost ? null : String(net.aliasCode || net.code || '').replace(/-\d+$/, ''); leaveOnline(net.isHost ? ui("Room closed: all players are inactive") : ui("Removed for inactivity")); lobby.rejoinCode = back; if (back) showStart(); return; }
   // the host also clears out a client that has sat idle past the limit, in case its tab cannot do it itself
-  if (net.isHost) for (const [id, r] of remote) if (r.idle && r.idleSince && performance.now() / 1000 - r.idleSince > limit - IDLE_FLAG + 15) { net.sendTo(id, 'kick', { reason: 'idle' }); const c = net.conns.get(id); setTimeout(() => { try { c && c.close(); } catch (e) { /* ignore */ } }, 500); }
+  if (net.isHost) for (const [id, r] of remote) if (r.idle && r.idleSince && performance.now() / 1000 - r.idleSince > limit - IDLE_FLAG + 15) net.enforceKick(id, { reason: 'idle', ban: false });
 }
-net.on('kick', (d) => { const back = d?.reason === 'idle' ? String(net.aliasCode || net.code || '').replace(/-\d+$/, '') : null; leaveOnline(d?.reason === 'idle' ? ui('Removed for inactivity') : ui('Removed from the room')); lobby.rejoinCode = back; showStart(); });
+net.on('kick', (d) => { const anti = d?.reason === 'anti-cheat'; const back = d?.reason === 'idle' ? String(net.aliasCode || net.code || '').replace(/-\d+$/, '') : null; leaveOnline(anti ? ui('Removed from match: anti-cheat violation') : d?.reason === 'idle' ? ui('Removed for inactivity') : ui('Removed from the room')); lobby.rejoinCode = anti ? null : back; showStart(); });
 const sceneClock = new SceneClock();
 let scenePingT = 0, sceneHost = null;
 net.on('scene-ping', (d, from) => { if (net.isHost && Number.isInteger(d?.id)) net.sendTo(from, 'scene-pong', { id: d.id, time: sceneClock.time() }); });
 net.on('scene-pong', (d, from) => { if (!net.isHost && from === net.hostId) sceneClock.accept(d); });
-Object.assign(window.__game, { sceneClock });
+if (DEV_DEBUG) Object.assign(window.__game, { sceneClock });
 let syncTick = 0;
 function netUpdate(dt) {
   if (net.isHost && online() && inMatch() && !game.over) { combat.tick(); tickHostMines(dt); combatSyncT -= dt; if (combatSyncT <= 0) { combatSyncT = .2; for (const v of combat.views()) publishVitals(v); } }
@@ -898,7 +941,7 @@ function netUpdate(dt) {
   if (net.isHost && clockOn) { game.matchT += dt; if (matchLeft <= 0) { const rows = sortedScores(); const w = game.matchMode==='tdm' ? tdmTimeWinner() : rows.length ? { id: rows[0][0], name: rows[0][1].name } : { id: net.id, name: myName }; net.send('end', w); endMatch(w); } }
 }
 function leaveOnline(reason) {
-  net.leave(); for (const id of [...remote.keys()]) removeRemote(id); lobby.players.clear(); scores.clear(); hud.setBoard(null);
+  net.leave(); for (const id of [...remote.keys()]) removeRemote(id); antiCheat.players.clear(); lobby.players.clear(); scores.clear(); hud.setBoard(null);
   if (game.state !== 'start') { game.state = 'start'; game.mode = 'solo'; setArena(false); resetGame(); hud.setGameplayVisible(false); }
   game.menu = false; lobby.status = reason || ''; screen = 'online'; showStart();
 }
@@ -1150,7 +1193,7 @@ function startMatch(late, spawnIdx) {
 }
 function pause() { if ((game.state !== 'play' && !(game.state === 'dying' && online())) || game.menu) return; if (!online()) game.state = 'pause'; game.menu = true; showPause(); audio.reelLoop(false); }
 function resume() { if (online()) { if (respawnLocal()) return; game.menu = false; hud.hideScreen(); hud.setGameplayVisible(true); if (!input.usingGamepad) input.requestLock(); return; } begin(); }
-Object.assign(window.__game, { startWave, updateWaves, begin, beginAtWave, jumpToWave, resetGame, spawnPickup, focusCandidate, enterFocus, pickSpawn, startMatch, createLobby, joinLobby, quickPlay, leaveOnline, hostStart });
+if (DEV_DEBUG) Object.assign(window.__game, { startWave, updateWaves, begin, beginAtWave, jumpToWave, resetGame, spawnPickup, focusCandidate, enterFocus, pickSpawn, startMatch, createLobby, joinLobby, quickPlay, leaveOnline, hostStart });
 hud.onScreenClick = () => {
   const st = game.state;
   if (st === 'over') { if (net.isHost) { net.send('backtolobby', {}); toLobbyScreen(); } return; }

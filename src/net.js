@@ -26,7 +26,10 @@ export class Net {
     try { this.clientId = localStorage.getItem('doodle_client_id') || newClientId(); localStorage.setItem('doodle_client_id', this.clientId); } catch { this.clientId = newClientId(); }
     this.peer = null; this.conns = new Map(); this.isHost = false; this.id = null; this.code = null; this.hostId = null;
     this.handlers = new Map(); this.connected = false; this.onPeerJoin = null; this.onPeerLeave = null; this.onDisconnect = null;
-    this.bannedPeers = new Set(); this.bannedClients = new Set(); this.ingressRates = new Map(); this.onIngress = null;
+    // Room-lifetime bans. PeerJS ids are temporary, so a stable per-browser
+    // client id is stored as a second key when available. This is deliberately
+    // not fingerprinting: a determined user can reconnect with a new identity.
+    this.bannedPeers = new Map(); this.bannedClients = new Map(); this.ingressRates = new Map(); this.onIngress = null; this.onProtocolViolation = null;
     this.maxPlayers = 25; this.accepting = true; this.hostName = ''; this.stats = { sent: 0, recv: 0 }; this.isPublic = false;
   }
   get active() { return !!this.peer && this.connected; }
@@ -54,20 +57,25 @@ export class Net {
     else if (pid === this.hostId) { this.connected = false; if (this.onDisconnect) this.onDisconnect(); }
   }
   _route(msg, from) {
-    if (!msg || typeof msg.t !== 'string' || !msg.d || typeof msg.d !== 'object') return;
+    const report = (kind, details = {}) => {
+      if (this.isHost && this.conns.has(from) && !this.bannedPeers.has(from)) {
+        try { this.onProtocolViolation?.(from, kind, details); } catch { /* detector failures must not stop routing */ }
+      }
+    };
+    if (!msg || typeof msg.t !== 'string' || !msg.d || typeof msg.d !== 'object') { report('malformed-packet'); return; }
     if (this.isHost && (!this.conns.has(from) || this.bannedPeers.has(from))) return;
     if (!this.isHost && from !== this.hostId) return;
-    if (JSON.stringify(msg).length > 16384) return;
+    if (JSON.stringify(msg).length > 16384) { report('oversized-packet'); return; }
     if (this.isHost) {
       const now = performance.now(), previous = this.ingressRates.get(from) || { t: now, tokens: 320 };
       previous.tokens = Math.min(320, previous.tokens + (now - previous.t) * .16); previous.t = now;
-      this.ingressRates.set(from, previous); if (previous.tokens < 1) return; previous.tokens--;
+      this.ingressRates.set(from, previous); if (previous.tokens < 1) { report('packet-flood'); return; } previous.tokens--;
     }
-    if (['pdmg', 'phit', 'pdead'].includes(msg.t)) return; // obsolete client-authoritative combat
+    if (['pdmg', 'phit', 'pdead'].includes(msg.t)) { report('protocol-bypass'); return; } // obsolete client-authoritative combat
 
     // Match/lobby authority belongs to the connected host. Do this before
     // forwarding, so a guest cannot relay or spoof a host control message.
-    if (['team-round', 'team-state', 'start', 'startreq', 'lobby', 'end', 'backtolobby', 'kick', 'score', 'clock', 'leave', 'pickup', 'taken', 'feed', 'combat-state', 'combat-death', 'combat-result', 'cut', 'parry', 'refused', 'scene-pong'].includes(msg.t)) {
+    if (['team-round', 'team-state', 'start', 'startreq', 'lobby', 'end', 'backtolobby', 'kick', 'anti-cheat-kick', 'anti-cheat-ban', 'anti-cheat-clear', 'score', 'clock', 'leave', 'pickup', 'taken', 'feed', 'combat-state', 'combat-death', 'combat-result', 'cut', 'parry', 'refused', 'scene-pong'].includes(msg.t)) {
       if (this.isHost || from !== this.hostId || (msg.from && msg.from !== this.hostId)) return;
     }
     if (this.isHost) {
@@ -235,12 +243,22 @@ export class Net {
     this.peer = null; this.connected = false; this.isHost = false; this.id = null; this.code = null; this.hostId = null; this.leaving = false;
   }
 
-  kick(pid) {
+  enforceKick(pid, { reason = 'anti-cheat', ban = true, evidence = null } = {}) {
     if (!this.isHost || pid === this.id) return false;
     const c = this.conns.get(pid); if (!c) return false;
-    this.bannedPeers.add(pid); if (c.metadata?.clientId) this.bannedClients.add(c.metadata.clientId);
-    this.sendTo(pid, 'kick', { reason: 'host' }); this._drop(pid);
-    setTimeout(() => { try { c.close(); } catch {} }, 150); return true;
+    const createdAt = Date.now(), record = { reason, createdAt, expiresAt: null, evidence: evidence || null, clientId: c.metadata?.clientId || null };
+    if (ban) {
+      this.bannedPeers.set(pid, record);
+      if (record.clientId) this.bannedClients.set(record.clientId, record);
+    }
+    // The client gets only a generic reason; evidence stays in the host log.
+    this.sendTo(pid, 'kick', { reason: reason === 'anti-cheat' || String(reason).startsWith('AIM') || String(reason).startsWith('TRIGGER') || String(reason).startsWith('MOVEMENT') || String(reason).startsWith('protocol_') ? 'anti-cheat' : 'host' });
+    this._drop(pid);
+    setTimeout(() => { try { c.close(); } catch {} }, 150);
+    return true;
+  }
+  kick(pid) {
+    return this.enforceKick(pid, { reason: 'host', ban: true });
   }
   // ---- messaging ----
   // host: to everyone; client: to the host (and on to everyone if relay is set)

@@ -66,6 +66,11 @@ export class HostCombat {
         deadAt: null,
         lastDamage: now,
         lastSnap: now,
+        // A map/round transition can leave one buffered snapshot from the
+        // previous spawn in a reliable WebRTC channel. Give the new life a
+        // short receive grace period before movement evidence is collected.
+        movementGraceUntil: now + 1.2,
+        spawnGraceUntil: now + 1.2,
         history: [],
         rates: new Map(),
         seen: new Set(),

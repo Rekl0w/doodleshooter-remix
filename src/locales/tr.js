@@ -120,6 +120,7 @@ export default {
   "Room closed: all players are inactive": "Oda kapandı: tüm oyuncular hareketsiz",
   "Removed for inactivity": "Hareketsizlik nedeniyle odadan çıkarıldın",
   "Removed from the room": "Odadan çıkarıldın",
+  "Removed from match: anti-cheat violation": "Maçtan çıkarıldın: hile koruması ihlali",
   " disconnected": " bağlantısı kesildi",
   "The timer starts when another player joins": "Bir oyuncu katılınca süre başlayacak",
   "Creating room…": "Oda oluşturuluyor…",

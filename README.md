@@ -103,7 +103,8 @@ Choose **Game mode** in the lobby. Players choose **Red team** or **Blue team**;
 - **Allow katana** is set before each match. Disabled katana is skipped by weapon cycling and quick melee, and the host rejects katana damage. Late joiners inherit the same rule.
 - The host owns health, spawn protection, accepted damage, deaths, scores and respawns. Hit proposals are checked for weapon damage, cadence, replay, life generation, range, cover, and consistency between aim, bullet direction and impact position. Grenades and mines damage players through host simulation; health pickups and regeneration also use the host ledger.
 - A modified guest cannot stay alive for everyone else by ignoring damage or forging health, death, invisibility or host-control messages. Killing the guest still updates the host score, and attacks from their dead life are rejected.
-- **The host must be trusted.** This is a temporary P2P safeguard, not complete anti-cheat: there is no trusted dedicated server, authoritative movement/ammunition simulation, or reliable aimbot detection. Shot-ray consistency rejects basic forged impacts, but a cheat can forge a coherent aim and ray or automate legitimate inputs. High accuracy alone never triggers an automatic kick. A malicious host can still change match decisions. Anonymous room removal can be bypassed by changing/clearing browser identity. Client-side code and keys cannot be made secret from the person running the browser.
+- **Automatic anti-cheat enforcement:** `src/anti-cheat.js` runs on the host and keeps a short rolling evidence window. Malformed combat packets, forged life generations, replayed hit ids, impossible origins/rays, invalid weapons, cadence bypasses and repeated teleport snapshots are rejected and accumulate deterministic strikes. Repeated extreme snap + head convergence patterns and clustered near-zero trigger timing add behavioral evidence; one flick or headshot never kicks. High-confidence aim/trigger/movement evidence automatically removes the guest, closes the connection, removes its combat entity, records host-only evidence and room-bans its peer and stable client id for the lifetime of the room. The removed client sees only **“Removed from match: anti-cheat violation”**.
+- **The host must still be trusted.** This is a P2P safeguard, not an uncheatable game: the host browser contains `HostCombat` and `AntiCheat`, so a malicious host can modify match decisions. A guest can still automate inputs that look like valid human input, and a determined user can reconnect with a completely new PeerJS/browser identity. Client-side code and keys cannot be made secret from the person running the browser. A future dedicated server can reuse the modular aim history, movement validation, scoring and enforcement code.
 - The room ends when its host leaves; combat authority is not transferred to another player. These safeguards require no new hosting service or paid backend.
 
 ## Run locally
@@ -147,7 +148,9 @@ node tests/team-maps.mjs
 node tests/teams.mjs
 node tests/team-deathmatch.mjs
 node tests/host-combat.mjs
+node tests/anti-cheat.mjs
 node tests/authority.mjs
+node tests/anti-cheat-online.mjs
 node tests/match-rules.mjs
 node tests/run.mjs
 node tests/maps.mjs
@@ -157,11 +160,12 @@ node tests/ui.mjs
 node tests/appearance.mjs
 node tests/online.mjs
 node tests/multiplayer-regression.mjs
+node tests/production-debug.mjs
 ```
 
 On Windows, tests use installed Microsoft Edge. Set `GAME_URL` to use another server, or `PLAYWRIGHT_MODULE` to point to an existing Playwright installation. UI and online tests create private rooms and require internet access. Run browser suites sequentially.
 
-Coverage includes movement, ammo, damage, map loading, safe spawns, bot paths, scopes, dual pistols, Dust traversal and boundaries, English/Turkish persistence, lobby card styles, host-only match starts, real two-client WebRTC synchronization, and three-client respawn / hit-acknowledgement / nameplate regressions.
+Coverage includes movement, ammo, damage, map loading, safe spawns, bot paths, scopes, dual pistols, Dust traversal and boundaries, English/Turkish persistence, lobby card styles, host-only match starts, real two-client WebRTC synchronization, three-client respawn / hit-acknowledgement / nameplate regressions, deterministic anti-cheat strikes, behavioral scoring/decay, automatic kick and room-ban enforcement, post-kick packet rejection, and production debug-surface removal.
 
 ## Technology and contributions
 
