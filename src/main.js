@@ -17,7 +17,7 @@ import { Player } from './player.js';
 import { RemotePlayer, encodeLocal } from './players.js';
 import { Net } from './net.js';
 import { HUD, CONTROLS_HTML } from './hud.js';
-import { HostCombat, movementLimit, vector } from './host-combat.js';
+import { HostCombat, COMBAT_RULES, movementLimit, vector } from './host-combat.js';
 import { AntiCheat } from './anti-cheat.js';
 import { Nameplates } from './nameplates.js';
 import { audio } from './audio.js';
@@ -257,14 +257,33 @@ function allowMine(d,from) {
  if(!roundLive())return false;
  const p=combat.players.get(from),key=from+':'+d?.id;
  if(!p||typeof d?.id!=='string'||d.id.length>100||!vector(d.pos)||d.map!==level.key)return false;
- if(d.op==='remove'){hostMines.delete(key);return true;}
+ if(d.op==='remove'){
+  // Only the owner may retract a live mine. Without this ownership check a
+  // guest could erase another player's mine through a forged remove packet.
+  const mine=hostMines.get(key); if(!mine||mine.owner!==from)return false;
+  hostMines.delete(key); return true;
+ }
  if(d.op!=='place'||p.hp<=0||p.mines<=0||hostMines.has(key)||[...hostMines.values()].filter(m=>m.owner===from).length>=4)return false;
- if(new THREE.Vector3(...d.pos).distanceTo(new THREE.Vector3(...p.pos))>4.5||!combat.sight([p.pos[0],p.pos[1]+1.5,p.pos[2]],d.pos)||!combat.allow(p,'mine',.6,1))return false;
+ const minePos=new THREE.Vector3(...d.pos),ground=world.raycast({x:minePos.x,y:minePos.y+.55,z:minePos.z},{x:0,y:-1,z:0},.9);
+ if(!ground||ground.normal.y<.75||Math.abs(ground.point.y-minePos.y)>.35)return false;
+ if(minePos.distanceTo(new THREE.Vector3(...p.pos))>4.5||!combat.sight([p.pos[0],p.pos[1]+1.5,p.pos[2]],d.pos)||!combat.allow(p,'mine',.6,1))return false;
  hostMines.set(key,{owner:from,id:d.id,pos:[...d.pos],at:performance.now()/1000});p.mines--;return true;
+}
+function mineVisibleTo(viewerId, pos, owner) {
+ if (viewerId === owner) return true;
+ const viewer=combat.players.get(viewerId); if(!viewer||viewer.hp<=0)return false;
+ const eye=new THREE.Vector3(viewer.pos[0],viewer.pos[1]+1.6,viewer.pos[2]);
+ return world.hasLineOfSight(eye,new THREE.Vector3(...pos));
+}
+function relayMineVisual(d, owner) {
+ const out={op:d.op,id:d.id,pos:[...d.pos],map:level.key,owner};
+ for(const pid of net.conns.keys()) if(mineVisibleTo(pid,out.pos,owner)) net.sendTo(pid,'ordnance',out,owner);
+ // The host also renders remote mines locally after validation.
+ if(owner!==net.id) net._emit('ordnance',out,owner);
 }
 function removeHostMine(key,m,boom=false) {
  hostMines.delete(key);const d={op:boom?'boom':'remove',id:m.id,pos:m.pos,map:level.key,owner:m.owner};
- player.ordnance.receive(d,m.owner);net.send('ordnance',d);
+ player.ordnance.receive(d,m.owner);relayMineVisual(d,m.owner);
  if(boom){const c=new THREE.Vector3(...m.pos);c.y+=.12;combat.blast(m.owner,m.id,c.toArray(),'mine');ctx.blastBreakables?.(c,6);}
 }
 function clearHostMines(owner) {for(const [key,m]of hostMines)if(m.owner===owner)removeHostMine(key,m);}
@@ -326,6 +345,21 @@ const relayShotVisual = (from, data) => {
   if (view && !(view[6] & 2048)) net._emit('shots', data, from);
  }
 };
+// A movement envelope alone still permits a cheater to walk straight through
+// a wall at a plausible speed. The host has the authoritative collision world,
+// so reject destinations inside geometry and short straight-line crossings.
+const snapshotPathViolation = (p, d) => {
+ if (!d.every(Number.isFinite)) return null;
+ const pos = new THREE.Vector3(d[0], d[1], d[2]);
+ const crouched = !!(d[6] & 1);
+ const body = { pos, halfW: .36, height: crouched ? 1.1 : 1.8 };
+ if (world.overlapsBody(body)) return 'inside-collider';
+ const previous = new THREE.Vector3(...p.pos), distance = previous.distanceTo(pos);
+ if (distance < .18 || distance > 6) return null;
+ const from = previous.clone(); from.y += crouched ? .55 : .9;
+ const to = pos.clone(); to.y += crouched ? .55 : .9;
+ return world.hasLineOfSight(from, to) ? null : 'through-collider';
+};
 net.onIngress=(msg,from)=>{
  const d=msg.d,p=combat.players.get(from);
  if(!roundLive() && !['ps','scene-ping','mine-sync','team-select','weapon-select'].includes(msg.t))return antiReject(from,'out-of-phase-packet',{type:msg.t},'medium');
@@ -356,8 +390,27 @@ net.onIngress=(msg,from)=>{
   if (Number.isInteger(p.snap?.[5]) && d[5] !== p.snap[5]) {
    antiCheat.recordProtocolViolation(from, 'forged-weapon-state', 'medium', { expected: p.snap[5], received: d[5] });
   }
+  const velocity = Math.hypot(d[8], d[9], d[10]);
+  if (velocity > COMBAT_RULES.maxSnapshotVelocity) {
+   antiCheat.recordProtocolViolation(from, 'forged-velocity', 'medium', { velocity: Number(velocity.toFixed(1)) });
+   net.sendTo(from,'combat-state',{...combat.view(p),correction:true});
+   return null;
+  }
   const moved = vector(d.slice(0,3)) ? Math.hypot(d[0]-p.pos[0],d[1]-p.pos[1],d[2]-p.pos[2]) : Infinity, dt = Math.max(.001, now - p.lastSnap), maxDistance = movementLimit(dt);
   if (p.hp > 0 && now > (p.movementGraceUntil || 0) && (moved > maxDistance || moved / dt > 75)) antiCheat.recordMovementViolation(from,{distance:moved,maxDistance,dt,reason:moved / dt > 75 ? 'impossible-speed' : 'impossible-snapshot'});
+  if (p.hp > 0 && now > (p.movementGraceUntil || 0)) {
+   const pathViolation = snapshotPathViolation(p, d);
+   if (pathViolation) {
+    // A destination inside a collider is deterministic. A short segment that
+    // crosses a corner can also be produced by a legitimate packet gap, so it
+    // is logged at the slower protocol threshold while the snapshot is still
+    // rejected and the host position remains authoritative.
+    if (pathViolation === 'inside-collider') antiCheat.recordMovementViolation(from,{distance:moved,maxDistance,dt,reason:pathViolation});
+    else antiCheat.recordProtocolViolation(from,'noclip-path','low',{distance:Number(moved.toFixed(2)),dt:Number(dt.toFixed(3))});
+    net.sendTo(from,'combat-state',{...combat.view(p),correction:true});
+    return null;
+   }
+  }
   const snap=combat.snapshot(from,d);
   if(!snap){if(p)net.sendTo(from,'combat-state',{...combat.view(p),correction:true});return null;}
   antiCheat.recordSnapshot(from,{at:now,position:snap.slice(0,3),yaw:snap[3],pitch:snap[4],targets:[...combat.players.values()].filter(t=>t.id!==from&&t.hp>0).map(t=>({id:t.id,position:t.pos,height:(t.snap?.[6]&1)?1.45:1.75}))});
@@ -365,7 +418,10 @@ net.onIngress=(msg,from)=>{
   return {...msg,d:snap,relay:false,to:undefined};
  }
  if(msg.t==='nade'){if(!allowGrenade(d,from))return null;return {...msg,d:{id:d.id,pos:d.pos,vel:d.vel},relay:true,to:undefined};}
- if(msg.t==='ordnance'){if(!allowMine(d,from))return null;return {...msg,d:{op:d.op,id:d.id,pos:d.pos,map:d.map},relay:true,to:undefined};}
+ if(msg.t==='ordnance'){
+  if(!allowMine(d,from))return null;
+  relayMineVisual(d,from); return null;
+ }
  if(msg.t==='shots') {
   if(!p||p.hp<=0||!Array.isArray(d.e)||d.e.length>120||d.e.length%3!==0||!d.e.every(n=>Number.isFinite(n)&&Math.abs(n)<=2000)||!WEAPON_ORDER.includes(d.k))return antiReject(from,'invalid-shot',{weapon:d?.k});
   relayShotVisual(from, { k: d.k, e: d.e }); return null;
@@ -787,11 +843,11 @@ enemies.onKill = (e, info, over) => {
   const r = Math.random(); if (r < 0.5) spawnPickup('ammo', e.body.pos); else if (r < 0.62) spawnPickup('health', e.body.pos);
 };
 enemies.onBoss = (e) => { if (!e.alive) { hud.setBoss(null, null); game.boss = null; } else { game.boss = e; hud.setBoss(e.T.name, e.hp / e.maxHp); } };
-ctx.onOrdnance = d => { if (net.active) { const msg={...d,map:level.key}; if(net.isHost&&!allowMine(msg,net.id))return;net.broadcast('ordnance',msg); } };
+ctx.onOrdnance = d => { if (net.active) { const msg={...d,map:level.key}; if(net.isHost){if(!allowMine(msg,net.id))return;relayMineVisual(msg,net.id);} else net.send('ordnance',msg); } };
 net.on('ordnance', (d, from) => { if (d?.map === level.key) player.ordnance.receive(d, d.owner || from); });
 net.on('mine-sync', (d, from) => {
   if (!net.isHost || !net.inMatch || d?.map !== level.key) return;
-  for (const m of hostMines.values()) net.sendTo(from,'ordnance',{op:'place',id:m.id,pos:m.pos,map:level.key,owner:m.owner});
+  for (const m of hostMines.values()) if(mineVisibleTo(from,m.pos,m.owner)) net.sendTo(from,'ordnance',{op:'place',id:m.id,pos:m.pos,map:level.key,owner:m.owner},m.owner);
 });
 player.onThrow = d => { if(net.active){if(net.isHost&&!allowGrenade(d,net.id))return;net.broadcast('nade',d);} };
 

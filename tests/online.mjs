@@ -44,14 +44,21 @@ try {
   }));
   await guest.waitForFunction(() => vitalPackets.length > 0, null, { timeout: 5000 });
   check('combat-state side channel never exposes another player position', await guest.evaluate(() => vitalPackets.every(v => v.pos?.[1] === -100 && v.lastHit === null)));
+  const earlyGuestId = await guest.evaluate(() => __game.net.id);
   await guest.waitForFunction(() => __game.sceneClock.samples.length >= 2, null, { timeout: 15000 });
   check('both clients have the same 12 weapon slots', await guest.evaluate(() => __game.player.weapons.length === 12));
+  await guest.waitForTimeout(450);
+  check('late join does not receive hidden mine positions', await guest.evaluate(() => __game.player.ordnance.remoteMines.size === 0));
+  const minePos = await host.evaluate(() => __game.player.ordnance.mines[0].pos.toArray());
+  await host.evaluate(({ id, pos }) => {
+    const g=__game,p=g.combat.players.get(id); p.pos=[pos[0],pos[1],pos[2]+1]; p.lastSnap=performance.now()/1000; p.movementGraceUntil=performance.now()/1000+1.2;
+  }, { id: earlyGuestId, pos: minePos });
+  await guest.evaluate(pos => { const g=__game; g.player.body.pos.set(pos[0],pos[1],pos[2]+1); g.player.body.vel.set(0,0,0); g.net.send('mine-sync',{map:g.level.key}); }, minePos);
   await guest.waitForFunction(() => __game.player.ordnance.remoteMines.size === 1, null, { timeout: 5000 });
-  check('late join receives existing mines after loading the map', true);
+  check('late join receives a mine after line of sight opens', true);
   const clock = async p => p.evaluate(() => ({ time: __game.sceneClock.time(), wall: Date.now(), samples: __game.sceneClock.samples.length }));
   const [a, b] = await Promise.all([clock(host), clock(guest)]);
   check('host and guest bird clocks agree within 120 ms', Math.abs((a.time - b.time) - (a.wall - b.wall) / 1000) < .12);
-  const earlyGuestId = await guest.evaluate(() => __game.net.id);
   await host.evaluate(guestId => {
     const g = __game;
     for (const [id, z] of [[g.net.id, 20], [guestId, 10]]) {

@@ -66,6 +66,11 @@ time = .001;
 check('micro-timestamp speed hack rejected', c.snapshot('b', snap('b', {
   0: 1.1
 })) === null);
+check('forged velocity envelope is rejected before grenade authority can widen', c.snapshot('b', snap('b', {
+  8: 54,
+  9: 20,
+  10: 0
+})) === null);
 time = 3;
 let d = packet(),
   result = c.hit('a', d);

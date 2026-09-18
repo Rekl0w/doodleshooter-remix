@@ -8,7 +8,11 @@ export const COMBAT_RULES = Object.freeze({
   // A second ledger bucket spans weapon switches, so alternating weapons
   // cannot turn a sniper into a machine gun.
   globalShotInterval: 1 / 20,
-  globalShotBurst: 4
+  globalShotBurst: 4,
+  // The local controller clamps the full body velocity to 48 m/s. Keep a
+  // little room for rounding, but reject forged velocity vectors before they
+  // can widen the host's grenade envelope or mislead remote interpolation.
+  maxSnapshotVelocity: 55
 });
 // Client movement is intentionally bounded by the host. The old envelope was
 // large enough for a forged snapshot to jump dozens of metres every tick;
@@ -118,7 +122,7 @@ export class HostCombat {
     if (!p || !Array.isArray(s) || s.length !== 15 || !s.every(Number.isFinite) || !Number.isInteger(s[5]) || s[5] < 0 || s[5] >= WEAPON_ORDER.length || !Number.isInteger(s[6]) || s[6] < 0 || s[6] > 8191) return null;
     const pos = s.slice(0, 3),
       now = this.now();
-    if (!vector(pos) || Math.abs(s[4]) > 1.6 || s.slice(8, 11).some(v => Math.abs(v) > 350)) return null;
+    if (!vector(pos) || Math.abs(s[4]) > 1.6 || s.slice(8, 11).some(v => Math.abs(v) > 350) || Math.hypot(...s.slice(8, 11)) > COMBAT_RULES.maxSnapshotVelocity) return null;
     if (p.hp > 0 && s[14] === p.life && this.enabled()) {
       const elapsed = Math.max(.001, now - p.lastSnap), moved = dist(pos, p.pos);
       if (moved > movementLimit(elapsed) || moved / elapsed > 75) return null;

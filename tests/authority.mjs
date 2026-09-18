@@ -127,7 +127,7 @@ try {
   check('late join gets the same disabled katana rule and authoritative life', await rival.evaluate(() => __game.game.katanaAllowed === false && __game.player.lifeId > 0));
   await place(host, 0, 20);
   await place(guest, 0, 10);
-  await place(rival, 10, 10);
+  await place(rival, 8, 10);
   await host.waitForTimeout(500);
   await guest.keyboard.press('4');
   await guest.keyboard.press('f');
@@ -188,6 +188,13 @@ try {
   // Real mines and grenades remain host-simulated across a host respawn.
   check('guest places a legitimate mine', await guest.evaluate(() => __game.player.ordnance.placeMine()));
   await host.waitForFunction(() => __game.player.ordnance.remoteMines.size === 1);
+  const guestMine = await guest.evaluate(() => { const m=__game.player.ordnance.mines[0]; return { id:m.id, pos:m.pos.toArray(), map:__game.level.key }; });
+  await rival.evaluate(d => __game.net.send('ordnance', { op:'remove', ...d }), guestMine);
+  await host.waitForTimeout(180);
+  check('a rival cannot retract another player mine', await host.evaluate(() => __game.player.ordnance.remoteMines.size === 1));
+  await guest.evaluate(d => __game.net.send('ordnance', { op:'place', id:'floating-cheat', pos:[d.pos[0],d.pos[1]+8,d.pos[2]], map:d.map }), guestMine);
+  await host.waitForTimeout(180);
+  check('host rejects floating mine placement', await host.evaluate(() => __game.player.ordnance.remoteMines.size === 1));
   await host.evaluate(() => {
     const g = __game,
       c = g.combat,

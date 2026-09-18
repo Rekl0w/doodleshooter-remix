@@ -19,7 +19,7 @@ try {
  await host.waitForTimeout(400);for(const p of pages)await free(p);
  check('three clients start a real WebRTC match',await host.evaluate(()=>__game.remote.size===2));
  const guestId=await guest.evaluate(()=>__game.net.id),rivalId=await rival.evaluate(()=>__game.net.id);
- await place(host,0,20);await place(guest,0,10);await place(rival,10,10);await host.waitForTimeout(700);
+ await place(host,0,20);await place(guest,0,10);await place(rival,8,10);await host.waitForTimeout(700);
  check('visible player name renders as text',await host.locator('.player-name').filter({hasText:'Can <3'}).isVisible());
  await host.evaluate(()=>__game.hud.clearMessage()); if(process.env.QA_OUTPUT) await host.screenshot({path:resolve(process.env.QA_OUTPUT,'online-player-names.png')});
  await guest.evaluate(()=>{__game.player.crouching=true;__game.input.keys.crouch=true;});await host.waitForTimeout(300);
